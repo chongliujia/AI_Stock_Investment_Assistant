@@ -1,4 +1,21 @@
 # open_multi-agent_framework
+
+## How to start
+```
+#在根目录下
+1. 构建Docker镜像
+docker-compose build
+2. 运行容器
+export OPENAI_API_KEY=your_api_key_here
+docker-compose up
+or
+docker build -t document_agent -f docker/Dockerfile .
+docker run -e OPENAI_API_KEY=your_api_key_here -v $(pwd)/output_docs:/app/output_docs document_agent
+
+```
+
+
+## source code
 ```
 project_root/
 ├─ docker/

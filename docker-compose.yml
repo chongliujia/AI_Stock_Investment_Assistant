@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  document_agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ./output_docs:/app/output_docs
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
