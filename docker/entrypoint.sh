@@ -7,5 +7,8 @@ if [ -z "$OPENAI_API_KEY" ]; then
     exit 1
 fi
 
-# 执行命令
-exec "$@"
+# 获取要运行的脚本
+SCRIPT=${SCRIPT:-"examples/create_both_documents.py"}
+
+# 执行指定的Python脚本
+exec python "$SCRIPT"

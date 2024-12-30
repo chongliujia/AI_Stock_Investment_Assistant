@@ -3,9 +3,11 @@ FROM python:3.10-slim
 # 设置工作目录
 WORKDIR /app
 
-# 安装基础工具
+# 安装基础工具和中文字体
 RUN apt-get update && apt-get install -y \
     git \
+    fonts-wqy-zenhei \
+    fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制requirements
@@ -25,8 +27,8 @@ RUN chmod +x /app/docker/entrypoint.sh
 
 # 设置环境变量
 ENV PYTHONPATH=/app
-ENV OPENAI_API_KEY="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"
-ENV OPENAI_MODEL="gpt-4o-mini"
+ENV OPENAI_API_KEY=${OPENAI_API_KEY}
+ENV OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
 
 # 设置entrypoint
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

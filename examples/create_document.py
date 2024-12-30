@@ -8,9 +8,12 @@ def main():
     # 创建任务
     task = Task(
         task_type="create_document",
-        prompt="Write a short blog post about artificial intelligence and its impact on society.",
-        filename="ai_blog_post.txt",
-        doc_type="blog post"
+        prompt="Analyze the current state of artificial intelligence in finance, including its applications in trading, risk management, and personal banking. Discuss both benefits and potential risks.",
+        kwargs={
+            "filename": "ai_in_finance_5000.docx",
+            "doc_type": "analytical report",
+            "word_count": 5000
+        }
     )
     
     # 执行任务

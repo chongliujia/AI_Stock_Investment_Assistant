@@ -9,4 +9,5 @@ services:
       - ./output_docs:/app/output_docs
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - SCRIPT=${SCRIPT:-examples/create_both_documents.py}
