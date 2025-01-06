@@ -53,15 +53,17 @@ function App() {
     (event: React.DragEvent) => {
       event.preventDefault();
 
-      const nodeType = event.dataTransfer.getData('application/nodetype');
-      if (!nodeType) return;
+      const reactFlowBounds = document.querySelector('.react-flow-wrapper')?.getBoundingClientRect();
+      const nodeType = event.dataTransfer.getData('application/reactflow');
+      
+      if (!nodeType || !reactFlowBounds) return;
 
       const template = nodeTemplates.find(t => t.type === nodeType);
       if (!template) return;
 
       const position = {
-        x: event.clientX - 250,
-        y: event.clientY - 100,
+        x: event.clientX - reactFlowBounds.left,
+        y: event.clientY - reactFlowBounds.top,
       };
 
       const newNode = {
@@ -70,7 +72,7 @@ function App() {
         position,
         data: { 
           label: template.label,
-          ...template.configFields.reduce((acc, field) => ({
+          ...template.configFields?.reduce((acc, field) => ({
             ...acc,
             [field.name]: field.type === 'select' ? field.options[0] : ''
           }), {})
@@ -109,9 +111,9 @@ function App() {
       <div style={{ flex: 1, display: 'flex' }}>
         <NodePalette 
           templates={nodeTemplates} 
-          style={{ width: '200px' }}
+          style={{ width: '250px' }}
         />
-        <div style={{ flex: 1 }}>
+        <div className="react-flow-wrapper" style={{ flex: 1, position: 'relative' }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -122,6 +124,7 @@ function App() {
             onDrop={onDrop}
             onDragOver={onDragOver}
             nodeTypes={nodeTypes}
+            fitView
           >
             <Background />
             <Controls />

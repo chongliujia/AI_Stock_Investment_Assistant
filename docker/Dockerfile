@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     git \
     fonts-wqy-zenhei \
     fonts-wqy-microhei \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制requirements
@@ -22,15 +23,11 @@ COPY . /app/
 # 创建输出目录
 RUN mkdir -p /app/output_docs
 
-# 确保entrypoint脚本可执行
-RUN chmod +x /app/docker/entrypoint.sh
-
 # 设置环境变量
 ENV PYTHONPATH=/app
 ENV OPENAI_API_KEY=${OPENAI_API_KEY}
 ENV OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
 
-# 设置entrypoint
-ENTRYPOINT ["/app/docker/entrypoint.sh"]
+# 开发环境不使用entrypoint
 CMD ["python", "examples/create_document.py"]
 

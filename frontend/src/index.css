@@ -12,4 +12,51 @@ body {
 #root {
   width: 100%;
   height: 100vh;
+}
+
+.node-palette .draggable-node {
+  position: relative;
+  cursor: grab;
+}
+
+.node-palette .draggable-node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.node-palette .draggable-node:active {
+  cursor: grabbing;
+}
+
+.node-drag-preview {
+  padding: 10px;
+  background: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  pointer-events: none;
+}
+
+.react-flow__node {
+  cursor: grab;
+}
+
+.react-flow__node:active {
+  cursor: grabbing;
+}
+
+.react-flow-wrapper {
+  flex: 1;
+  height: 100%;
+}
+
+.react-flow__handle {
+  width: 8px;
+  height: 8px;
+  background: #4CAF50;
+  border: 2px solid white;
+}
+
+.react-flow__handle:hover {
+  background: #2E7D32;
 } 

@@ -11,7 +11,12 @@ services:
       - ./frontend:/app/frontend
       - /app/frontend/node_modules
     environment:
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://backend:8000
+    networks:
+      - workflow-net
+    depends_on:
+      backend:
+        condition: service_started
 
   backend:
     build:
@@ -21,7 +26,20 @@ services:
       - "8000:8000"
     volumes:
       - ./output_docs:/app/output_docs
+      - ./:/app/
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload 
+      - PYTHONPATH=/app
+    command: >
+      sh -c "chmod +x /app/docker/entrypoint.sh &&
+             pip install -r docker/requirements.txt &&
+             uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug"
+    networks:
+      - workflow-net
+    healthcheck:
+      disable: true
+
+networks:
+  workflow-net:
+    driver: bridge 
