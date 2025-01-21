@@ -1,27 +1,88 @@
 import os
-import openai
+import time
+from openai import OpenAI
+from openai import APIError, RateLimitError
+from typing import Optional
 from dotenv import load_dotenv
+import logging
 
-class OpenAIProvider:
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class LLMProvider:
     def __init__(self):
-        load_dotenv()
-        openai.api_key = os.getenv('OPENAI_API_KEY')
-        self.model = os.getenv('OPENAI_MODEL', 'gpt-4o')
+        self.api_key = os.getenv('OPENAI_API_KEY')
+        self.default_model = os.getenv('OPENAI_MODEL', 'gpt-4-turbo-preview')
+        self.max_retries = int(os.getenv('MAX_RETRIES', 3))
+        self.timeout = int(os.getenv('TIMEOUT', 300))
+        
+        if not self.api_key:
+            raise ValueError("API key not found in environment variables")
+        
+        self.client = OpenAI(api_key=self.api_key)
+        
+        # 设置代理
+        if os.getenv('HTTPS_PROXY'):
+            self.client.proxy = os.getenv('HTTPS_PROXY')
 
-    def generate_response(self, prompt):
-        try:
-            response = openai.ChatCompletion.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a professional content writer and researcher. Please respond in the same language as the prompt. Create well-structured, comprehensive documents with clear sections and detailed content."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=8000,
-                presence_penalty=0.6,
-                frequency_penalty=0.6,
-                top_p=0.9
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"Error generating response: {str(e)}" 
+    def generate_response(self, prompt: str, model: Optional[str] = None, 
+                         temperature: float = 0.7, max_tokens: int = 2000) -> str:
+        """
+        生成LLM响应，包含重试和错误处理机制
+        """
+        model = model or self.default_model
+        attempt = 0
+        
+        while attempt < self.max_retries:
+            try:
+                logger.info(f"Attempting to generate response with model {model} (attempt {attempt + 1})")
+                start_time = time.time()
+                
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "你是一个专业的AI助手，擅长分析和生成高质量内容。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+                
+                duration = time.time() - start_time
+                logger.info(f"Response generated successfully in {duration:.2f} seconds")
+                
+                return response.choices[0].message.content.strip()
+                
+            except RateLimitError:
+                wait_time = (2 ** attempt) + 1  # 指数退避
+                logger.warning(f"Rate limit reached. Waiting {wait_time} seconds...")
+                time.sleep(wait_time)
+                
+            except APIError as e:
+                logger.error(f"API Error: {str(e)}")
+                if "model_not_found" in str(e):
+                    # 如果模型不可用，尝试回退到GPT-3.5
+                    if model != "gpt-3.5-turbo":
+                        logger.info("Falling back to GPT-3.5-turbo")
+                        model = "gpt-3.5-turbo"
+                        continue
+                raise
+                
+            except Exception as e:
+                logger.error(f"Unexpected error: {str(e)}")
+                if attempt == self.max_retries - 1:
+                    raise
+                
+            attempt += 1
+            
+        raise Exception(f"Failed to generate response after {self.max_retries} attempts")
+
+    def get_available_models(self) -> dict:
+        """获取可用的模型列表"""
+        return {
+            "gpt-4-turbo-preview": "GPT-4 Turbo",
+            "gpt-4": "GPT-4",
+            "gpt-3.5-turbo": "GPT-3.5 Turbo",
+        } 

@@ -1,9 +1,19 @@
+import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from agents.document_agent import DocumentAgent
 from core.task_definition import Task
+from core.llm_provider import LLMProvider
+from agents.data_analyzer import DataAnalyzer
+from agents.stock_analyzer import StockAnalyzer
+from agents.investment_advisor import InvestmentAdvisor
+from agents.market_analyzer import MarketAnalyzer
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -31,33 +41,77 @@ class Workflow(BaseModel):
     nodes: List[WorkflowNode]
     edges: List[WorkflowEdge]
 
-@app.post("/api/workflow/execute")
-async def execute_workflow(workflow: Workflow):
+class InvestmentRequest(BaseModel):
+    query: str
+    
+@app.post("/api/analyze-investment")
+async def analyze_investment(request: InvestmentRequest):
     try:
-        # 创建文档agent
-        doc_agent = DocumentAgent()
-        results = []
+        logger.info(f"Received investment analysis request for: {request.query}")
+        
+        # 从查询中提取股票代码
+        query = request.query.strip()
+        
+        # 如果查询中没有明确的股票代码，尝试从文本中提取
+        if not any(char.isdigit() for char in query):
+            # 移除常见的词语来提取股票名称
+            stock_name = query.lower().replace('stock', '').replace('share', '').strip()
+            # 这里可以添加股票代码查找逻辑
+            symbols = stock_name
+            logger.info(f"Extracted stock name: {symbols}")
+        else:
+            symbols = query
+            logger.info(f"Using provided symbol: {symbols}")
 
-        # 按照工作流顺序执行节点
-        for node in workflow.nodes:
-            if node.type == "documentGenerator":
-                task = Task(
-                    task_type="create_document",
-                    prompt=node.data.get("prompt", ""),
-                    kwargs={
-                        "doc_type": node.data.get("docType", "report"),
-                        "word_count": node.data.get("wordCount", 1000),
-                        "lang": node.data.get("language", "en")
-                    }
-                )
-                result = doc_agent.handle_task(task)
-                results.append({
-                    "nodeId": node.id,
-                    "result": result
-                })
+        # 创建分析器实例
+        stock_analyzer = StockAnalyzer()
+        investment_advisor = InvestmentAdvisor()
 
-        return {"status": "success", "results": results}
+        # 分析股票数据
+        logger.info("Starting stock analysis...")
+        analysis_task = Task(
+            task_type="analyze_stocks",
+            prompt="",
+            kwargs={
+                "analysisType": "综合分析",
+                "symbols": symbols,
+                "period": "1y"
+            }
+        )
+        stock_analysis = stock_analyzer.handle_task(analysis_task)
+        logger.info("Stock analysis completed")
+
+        # 生成投资建议
+        logger.info("Generating investment advice...")
+        investment_task = Task(
+            task_type="analyze_investment",
+            prompt="",
+            kwargs={
+                "analysisType": "综合分析",
+                "symbols": symbols,
+                "riskLevel": "moderate",
+                "investmentHorizon": "medium"
+            }
+        )
+        investment_advice = investment_advisor.handle_task(investment_task)
+        logger.info("Investment advice generated")
+
+        result = {
+            "status": "success",
+            "data": {
+                "stockAnalysis": stock_analysis,
+                "investmentAdvice": {
+                    "advice": investment_advice.get("advice", ""),
+                    "fundamentals": investment_advice.get("fundamentals", {}),
+                    "charts": investment_advice.get("charts", [])
+                }
+            }
+        }
+        logger.info("Analysis completed successfully")
+        return result
+        
     except Exception as e:
+        logger.error(f"Error during analysis: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/nodes/templates")
@@ -66,72 +120,54 @@ async def get_node_templates():
     return {
         "nodes": [
             {
-                "type": "documentGenerator",
-                "label": "文档生成器",
-                "description": "生成指定类型的文档",
-                "category": "输出",
+                "type": "investmentAnalysis",
+                "label": "投资分析",
+                "description": "分析股票并提供投资建议",
+                "category": "金融分析",
                 "configFields": [
                     {
-                        "name": "prompt",
-                        "type": "textarea",
-                        "label": "提示词"
-                    },
-                    {
-                        "name": "docType",
-                        "type": "select",
-                        "label": "文档类型",
-                        "options": ["报告", "分析", "总结"]
-                    },
-                    {
-                        "name": "wordCount",
-                        "type": "number",
-                        "label": "字数"
-                    },
-                    {
-                        "name": "language",
-                        "type": "select",
-                        "label": "语言",
-                        "options": ["zh", "en"]
-                    }
-                ]
-            },
-            {
-                "type": "researchAgent",
-                "label": "研究智能体",
-                "description": "收集和分析特定主题的信息",
-                "category": "收集",
-                "configFields": [
-                    {
-                        "name": "topic",
+                        "name": "query",
                         "type": "text",
-                        "label": "研究主题"
-                    },
-                    {
-                        "name": "depth",
-                        "type": "select",
-                        "label": "研究深度",
-                        "options": ["基础", "深入", "专业"]
-                    }
-                ]
-            },
-            {
-                "type": "dataAnalyzer",
-                "label": "数据分析器",
-                "description": "分析和处理数据",
-                "category": "分析",
-                "configFields": [
-                    {
-                        "name": "dataSource",
-                        "type": "text",
-                        "label": "数据来源"
-                    },
-                    {
-                        "name": "analysisType",
-                        "type": "select",
-                        "label": "分析类型",
-                        "options": ["统计分析", "趋势分析", "预测分析"]
+                        "label": "查询内容",
+                        "placeholder": "输入股票代码或公司名称"
                     }
                 ]
             }
         ]
-    } 
+    }
+
+@app.get("/api/models")
+async def get_available_models():
+    llm_provider = LLMProvider()
+    return {"models": llm_provider.get_available_models()}
+
+class Task(BaseModel):
+    task_type: str
+    kwargs: Dict[str, Any] = {}
+
+@app.post("/api/task")
+async def handle_task(task: Task):
+    try:
+        logger.info(f"Received task: {task.task_type}")
+        
+        if task.task_type == "analyze_document":
+            agent = DocumentAgent()
+            result = agent.handle_task(task)
+            return {"status": "success", "data": result}
+            
+        elif task.task_type == "analyze_investment":
+            agent = InvestmentAdvisor()
+            result = agent.handle_task(task)
+            return {"status": "success", "data": result}
+            
+        elif task.task_type == "analyze_market":
+            agent = MarketAnalyzer()
+            result = agent.handle_task(task)
+            return {"status": "success", "data": result}
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported task type: {task.task_type}")
+            
+    except Exception as e:
+        logger.error(f"Error handling task: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e)) 

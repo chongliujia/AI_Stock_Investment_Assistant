@@ -1,0 +1,15 @@
+README.md
+setup.py
+agents/__init__.py
+agents/data_analyzer.py
+agents/document_agent.py
+agents/gui_agent.py
+agents/investment_advisor.py
+agents/llm_agent.py
+agents/stock_analyzer.py
+agents/terminal_agent.py
+open_multi_agent_framework.egg-info/PKG-INFO
+open_multi_agent_framework.egg-info/SOURCES.txt
+open_multi_agent_framework.egg-info/dependency_links.txt
+open_multi_agent_framework.egg-info/requires.txt
+open_multi_agent_framework.egg-info/top_level.txt

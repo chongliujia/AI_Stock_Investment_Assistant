@@ -1,91 +1,124 @@
-# AI Workflow System
+# Open Multi-Agent Framework
 
-一个基于AI的工作流系统，支持文档生成和多智能体协作。
+一个基于多智能体的开放框架，支持文档生成、数据分析、股票分析和投资建议等功能。
 
-## 项目结构
+## 功能特点
 
-.
-├── agents/             # AI智能体实现
-├── api/               # FastAPI后端服务
-├── core/              # 核心功能模块
-├── docker/            # Docker配置文件
-├── frontend/          # React前端应用
-└── output_docs/       # 生成的文档输出目录
+- 文档生成：支持多种类型的文档自动生成
+- 数据分析：提供数据可视化和分析能力
+- 股票分析：实时股票数据分析和可视化
+- 投资建议：基于市场数据的智能投资建议
 
-## 使用指南
+## 本地安装和运行
 
-### 1. 环境配置
+### 环境要求
 
-1. 复制环境变量模板并设置：
+- Python 3.8+
+- Node.js 16+
+- npm 8+
 
-```
-cp .env.example .env
-```
+### 后端设置
 
-2. 确保已安装 Docker 和 Docker Compose
-
-### 2. 启动服务
-
-#### 开发环境
-
-```
-docker-compose -f docker-compose.dev.yml up
-``` 
-
-#### 生产环境
-
+1. 创建并激活Python虚拟环境：
 ```bash
-# 启动生产环境
-docker-compose up --build
+# 创建虚拟环境
+python -m venv venv
+
+# 激活虚拟环境
+# 在macOS/Linux上：
+source venv/bin/activate
+# 在Windows上：
+.\venv\Scripts\activate
 ```
 
-### 3. 访问服务
-
-- 前端界面：http://localhost:5173
-- API文档：http://localhost:8000/docs
-
-### 4. 使用工作流编辑器
-
-1. 从左侧面板拖拽智能体节点到工作区
-2. 点击节点进行配置（设置提示词、文档类型等）
-3. 连接节点形成工作流
-4. 点击"执行工作流"按钮运行
-
-### 5. 文档生成
-
-支持生成以下类型的文档：
-- 中文/英文报告
-- 分析文档
-- 研究总结
-
-可配置参数：
-- 文档类型
-- 字数要求
-- 语言选择
-- 自定义提示词
-
-生成的文档将保存在 `output_docs` 目录中。
-
-## 开发指南
-
-### 添加新的智能体
-
-1. 在 `agents/` 目录下创建新的智能体类
-2. 在 `api/main.py` 中注册新的节点类型
-3. 在前端添加对应的节点配置和显示逻辑
-
-### 调试
-
+2. 安装Python依赖和本地包：
 ```bash
-# 查看后端日志
-docker-compose -f docker-compose.dev.yml logs -f backend
+# 安装依赖
+pip install -r requirements.txt
 
-# 查看前端日志
-docker-compose -f docker-compose.dev.yml logs -f frontend
+# 安装本地包（开发模式）
+pip install -e .
 ```
+
+3. 配置环境变量：
+在项目根目录创建 `.env` 文件，添加必要的环境变量：
+```
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4
+```
+
+4. 启动后端服务：
+```bash
+cd api
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 前端设置
+
+1. 安装Node.js依赖：
+```bash
+cd frontend
+npm install
+```
+
+2. 启动前端开发服务器：
+```bash
+npm run dev
+```
+
+前端服务将在 http://localhost:5173 启动，后端API服务将在 http://localhost:8000 启动。
+
+## 使用说明
+
+1. 打开浏览器访问 http://localhost:5173
+2. 从左侧工具栏拖拽所需的功能节点到工作区
+3. 配置节点参数
+4. 点击执行按钮运行工作流
+
+### 可用节点类型
+
+- 文档生成器：自动生成各类文档
+- 数据分析器：分析和可视化数据
+- 股票分析器：分析股票市场数据
+- 投资顾问：提供投资建议和组合配置
 
 ## 注意事项
 
-1. 确保 API Key 安全性
-2. 注意文档生成的字数限制
-3. 保持工作流结构清晰
+1. 确保所有依赖都已正确安装
+2. 检查环境变量配置是否正确
+3. 前端和后端服务需要在不同的终端窗口中运行
+4. 如遇到问题，请检查控制台输出的错误信息
+
+## 常见问题
+
+1. 如果遇到依赖安装问题，可以尝试：
+```bash
+# 更新pip
+python -m pip install --upgrade pip
+
+# 清除npm缓存
+npm cache clean --force
+```
+
+2. 如果遇到模块导入错误，确保已经安装了本地包：
+```bash
+# 重新安装本地包
+pip install -e .
+```
+
+3. 如果端口被占用，可以修改启动命令中的端口号：
+```bash
+# 后端使用其他端口
+uvicorn main:app --reload --host 0.0.0.0 --port 8001
+
+# 前端使用其他端口
+# 修改 vite.config.ts 中的端口配置
+```
+
+## 贡献指南
+
+欢迎提交Issue和Pull Request来帮助改进项目。
+
+## 许可证
+
+MIT License

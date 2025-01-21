@@ -4,42 +4,38 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: docker/Dockerfile.dev
-    ports:
-      - "5173:5173"
+      dockerfile: docker/frontend.Dockerfile
     volumes:
       - ./frontend:/app/frontend
       - /app/frontend/node_modules
+      - ./docker/entrypoint.sh:/app/docker/entrypoint.sh
+    ports:
+      - "5173:5173"
     environment:
-      - VITE_API_URL=http://backend:8000
-    networks:
-      - workflow-net
+      - NODE_ENV=development
+    command: ["/app/docker/entrypoint.sh", "frontend"]
     depends_on:
-      backend:
-        condition: service_started
+      - backend
 
   backend:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/backend.Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    volumes:
+      - .:/app
+      - ./docker/entrypoint.sh:/app/docker/entrypoint.sh
+      - /app/output_docs
     ports:
       - "8000:8000"
-    volumes:
-      - ./output_docs:/app/output_docs
-      - ./:/app/
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - PYTHONPATH=/app
-    command: >
-      sh -c "chmod +x /app/docker/entrypoint.sh &&
-             pip install -r docker/requirements.txt &&
-             uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug"
-    networks:
-      - workflow-net
-    healthcheck:
-      disable: true
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    command: ["/app/docker/entrypoint.sh", "api"]
 
 networks:
-  workflow-net:
-    driver: bridge 
+  default:
+    name: workflow-net 

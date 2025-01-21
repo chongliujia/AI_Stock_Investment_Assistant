@@ -4,14 +4,16 @@ from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from core.base_agent import BaseAgent
-from core.llm_provider import OpenAIProvider
+from core.task_definition import Task
+from core.llm_provider import LLMProvider
 import re
 from datetime import datetime
 
 class DocumentAgent(BaseAgent):
-    def __init__(self, output_dir="output_docs"):
-        self.output_dir = output_dir
-        self.llm_provider = OpenAIProvider()
+    def __init__(self):
+        super().__init__()
+        self.llm_provider = LLMProvider()
+        self.output_dir = os.getenv('OUTPUT_DIR', 'output_docs')
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
@@ -120,8 +122,9 @@ class DocumentAgent(BaseAgent):
         doc_type = task.kwargs.get("doc_type", "general")
         word_count = task.kwargs.get("word_count", 1000)
         lang = task.kwargs.get("lang", "en")
+        model = task.kwargs.get("model", "gpt-4o")  # 添加模型参数
         
-        # 自动生成文件名（如果没有指定）
+        # 自动生成文件名
         filename = task.kwargs.get("filename")
         if not filename:
             filename = self._generate_filename(task.prompt, doc_type, lang)
@@ -134,8 +137,8 @@ class DocumentAgent(BaseAgent):
             topic=task.prompt
         )
 
-        # 使用LLM生成内容
-        content = self.llm_provider.generate_response(prompt)
+        # 使用指定的模型生成内容
+        content = self.llm_provider.generate_response(prompt, model=model)
         
         # 处理文件扩展名
         base_name, ext = os.path.splitext(filename)

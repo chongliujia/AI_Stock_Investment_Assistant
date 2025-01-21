@@ -1,150 +1,83 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import ReactFlow, {
-  Controls,
-  Background,
-  addEdge,
-  Connection,
-  Edge,
-  Node,
-  useNodesState,
-  useEdgesState,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import NodeConfigPanel from './components/NodeConfigPanel';
-import CustomNode from './components/CustomNode';
-import NodePalette from './components/NodePalette';
-import WorkflowToolbar from './components/WorkflowToolbar';
-
-const nodeTypes = {
-  documentGenerator: CustomNode,
-  researchAgent: CustomNode,
-  dataAnalyzer: CustomNode,
-};
+import React, { useState } from 'react';
+import InvestmentAnalysis from './components/InvestmentAnalysis';
+import MarketAnalysis from './components/MarketAnalysis';
 
 function App() {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [selectedNode, setSelectedNode] = useState(null);
-  const [nodeTemplates, setNodeTemplates] = useState([]);
-  const [isExecuting, setIsExecuting] = useState(false);
+  const [activeTab, setActiveTab] = useState<'investment' | 'market'>('investment');
+  const [marketResult, setMarketResult] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  // 获取节点模板
-  useEffect(() => {
-    fetch('/api/nodes/templates')
-      .then(res => res.json())
-      .then(data => setNodeTemplates(data.nodes));
-  }, []);
-
-  const onConnect = useCallback(
-    (params: Connection | Edge) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges]
-  );
-
-  const onNodeClick = useCallback((event: any, node: Node) => {
-    setSelectedNode(node);
-  }, []);
-
-  const onDragOver = useCallback((event: React.DragEvent) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-  }, []);
-
-  const onDrop = useCallback(
-    (event: React.DragEvent) => {
-      event.preventDefault();
-
-      const reactFlowBounds = document.querySelector('.react-flow-wrapper')?.getBoundingClientRect();
-      const nodeType = event.dataTransfer.getData('application/reactflow');
-      
-      if (!nodeType || !reactFlowBounds) return;
-
-      const template = nodeTemplates.find(t => t.type === nodeType);
-      if (!template) return;
-
-      const position = {
-        x: event.clientX - reactFlowBounds.left,
-        y: event.clientY - reactFlowBounds.top,
-      };
-
-      const newNode = {
-        id: `${nodeType}-${Date.now()}`,
-        type: nodeType,
-        position,
-        data: { 
-          label: template.label,
-          ...template.configFields?.reduce((acc, field) => ({
-            ...acc,
-            [field.name]: field.type === 'select' ? field.options[0] : ''
-          }), {})
-        },
-      };
-
-      setNodes((nds) => nds.concat(newNode));
-    },
-    [setNodes, nodeTemplates]
-  );
-
-  const executeWorkflow = async () => {
-    setIsExecuting(true);
+  const handleMarketAnalysis = async () => {
+    setLoading(true);
     try {
-      const response = await fetch('/api/workflow/execute', {
+      const response = await fetch('http://localhost:8000/api/task', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ nodes, edges }),
+        body: JSON.stringify({
+          task_type: 'analyze_market',
+          kwargs: {}
+        }),
       });
-      const result = await response.json();
-      console.log('Workflow execution result:', result);
+
+      if (!response.ok) {
+        throw new Error('市场分析请求失败');
+      }
+
+      const data = await response.json();
+      if (data.status === 'success') {
+        setMarketResult(data.data);
+      } else {
+        throw new Error(data.error || '分析过程中出错');
+      }
     } catch (error) {
-      console.error('Error executing workflow:', error);
+      console.error('Market analysis error:', error);
+      throw error;
+    } finally {
+      setLoading(false);
     }
-    setIsExecuting(false);
   };
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <WorkflowToolbar 
-        onExecute={executeWorkflow} 
-        isExecuting={isExecuting}
-      />
-      <div style={{ flex: 1, display: 'flex' }}>
-        <NodePalette 
-          templates={nodeTemplates} 
-          style={{ width: '250px' }}
-        />
-        <div className="react-flow-wrapper" style={{ flex: 1, position: 'relative' }}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onNodeClick={onNodeClick}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            nodeTypes={nodeTypes}
-            fitView
-          >
-            <Background />
-            <Controls />
-          </ReactFlow>
+    <div className="container mx-auto px-4 py-8">
+      <h1 className="text-3xl font-bold mb-8">智能投资助手</h1>
+      
+      <div className="mb-6">
+        <div className="border-b border-gray-200">
+          <nav className="-mb-px flex">
+            <button
+              onClick={() => setActiveTab('investment')}
+              className={`mr-8 py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'investment'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              个股分析
+            </button>
+            <button
+              onClick={() => setActiveTab('market')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'market'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              市场分析
+            </button>
+          </nav>
         </div>
-        {selectedNode && (
-          <NodeConfigPanel
-            node={selectedNode}
-            template={nodeTemplates.find(t => t.type === selectedNode.type)}
-            onClose={() => setSelectedNode(null)}
-            onUpdate={(updatedData) => {
-              setNodes((nds) =>
-                nds.map((n) => {
-                  if (n.id === selectedNode.id) {
-                    return { ...n, data: { ...n.data, ...updatedData } };
-                  }
-                  return n;
-                })
-              );
-            }}
+      </div>
+
+      <div className="mt-6">
+        {activeTab === 'investment' ? (
+          <InvestmentAnalysis />
+        ) : (
+          <MarketAnalysis
+            onAnalyze={handleMarketAnalysis}
+            result={marketResult}
+            loading={loading}
           />
         )}
       </div>
