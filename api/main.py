@@ -1,5 +1,5 @@
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -41,77 +41,40 @@ class Workflow(BaseModel):
     nodes: List[WorkflowNode]
     edges: List[WorkflowEdge]
 
-class InvestmentRequest(BaseModel):
-    query: str
-    
+class InvestmentRequest:
+    def __init__(self, symbols: List[str]):
+        self.symbols = symbols
+
 @app.post("/api/analyze-investment")
-async def analyze_investment(request: InvestmentRequest):
+async def analyze_investment(request: Request) -> Dict[str, Any]:
     try:
-        logger.info(f"Received investment analysis request for: {request.query}")
+        # 获取请求数据
+        data = await request.json()
+        logger.info(f"Received investment analysis request: {data}")
         
-        # 从查询中提取股票代码
-        query = request.query.strip()
+        # 验证请求数据
+        if not isinstance(data, dict) or 'symbols' not in data:
+            raise HTTPException(status_code=400, detail="请求格式错误：需要提供 symbols 字段")
         
-        # 如果查询中没有明确的股票代码，尝试从文本中提取
-        if not any(char.isdigit() for char in query):
-            # 移除常见的词语来提取股票名称
-            stock_name = query.lower().replace('stock', '').replace('share', '').strip()
-            # 这里可以添加股票代码查找逻辑
-            symbols = stock_name
-            logger.info(f"Extracted stock name: {symbols}")
-        else:
-            symbols = query
-            logger.info(f"Using provided symbol: {symbols}")
-
-        # 创建分析器实例
-        stock_analyzer = StockAnalyzer()
-        investment_advisor = InvestmentAdvisor()
-
-        # 分析股票数据
-        logger.info("Starting stock analysis...")
-        analysis_task = Task(
-            task_type="analyze_stocks",
-            prompt="",
-            kwargs={
-                "analysisType": "综合分析",
-                "symbols": symbols,
-                "period": "1y"
-            }
-        )
-        stock_analysis = stock_analyzer.handle_task(analysis_task)
-        logger.info("Stock analysis completed")
-
-        # 生成投资建议
-        logger.info("Generating investment advice...")
-        investment_task = Task(
-            task_type="analyze_investment",
-            prompt="",
-            kwargs={
-                "analysisType": "综合分析",
-                "symbols": symbols,
-                "riskLevel": "moderate",
-                "investmentHorizon": "medium"
-            }
-        )
-        investment_advice = investment_advisor.handle_task(investment_task)
-        logger.info("Investment advice generated")
-
-        result = {
+        symbols = data['symbols']
+        if not isinstance(symbols, list) or not symbols:
+            raise HTTPException(status_code=400, detail="请求格式错误：symbols 必须是非空数组")
+            
+        # 创建投资顾问实例并进行分析
+        advisor = InvestmentAdvisor()
+        # 使用await调用异步方法
+        result = await advisor.analyze_investment(symbols)
+        
+        return {
             "status": "success",
-            "data": {
-                "stockAnalysis": stock_analysis,
-                "investmentAdvice": {
-                    "advice": investment_advice.get("advice", ""),
-                    "fundamentals": investment_advice.get("fundamentals", {}),
-                    "charts": investment_advice.get("charts", [])
-                }
-            }
+            "data": result
         }
-        logger.info("Analysis completed successfully")
-        return result
         
+    except HTTPException as e:
+        logger.error(f"HTTP Exception: {str(e)}")
+        raise
     except Exception as e:
-        logger.error(f"Error during analysis: {str(e)}", exc_info=True)
+        logger.error(f"Error processing investment analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/nodes/templates")
@@ -152,17 +115,18 @@ async def handle_task(task: Task):
         
         if task.task_type == "analyze_document":
             agent = DocumentAgent()
-            result = agent.handle_task(task)
+            result = await agent.handle_task(task)
             return {"status": "success", "data": result}
             
         elif task.task_type == "analyze_investment":
             agent = InvestmentAdvisor()
-            result = agent.handle_task(task)
+            symbols = task.kwargs.get("symbols", [])
+            result = await agent.analyze_investment(symbols)
             return {"status": "success", "data": result}
             
         elif task.task_type == "analyze_market":
             agent = MarketAnalyzer()
-            result = agent.handle_task(task)
+            result = await agent.analyze_market()
             return {"status": "success", "data": result}
             
         else:
