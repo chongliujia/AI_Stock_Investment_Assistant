@@ -35,40 +35,46 @@ interface MarketData {
 }
 
 interface SectorData {
-  change: number;
+  symbol: string;
+  price_change: number;
   volume_change: number;
+  momentum: number;
+  rsi: number;
+  current_price: number;
+  macd_signal: string;
+  trend_strength: number;
+  trend: string;
+  volume_trend: string;
 }
 
 interface PotentialStock {
   symbol: string;
   name: string;
   sector: string;
-  industry: string;
-  technical_indicators: {
+  momentum: number;
+  rsi: number;
+  pe_ratio: number | null;
+  profit_margin: number | null;
+  score: number;
+  current_price: number;
+  volume: number;
+  market_cap: number;
+}
+
+interface MarketSentiment {
+  technical: {
     rsi: number;
-    macd: number;
-    sma_20: number;
-    sma_50: number;
-    close: number;
+    macd: string;
+    trend: string;
+    volume_trend: string;
+    volatility: number;
+    score: number;
   };
-  momentum_indicators: {
-    price_momentum: number;
-    volume_momentum: number;
+  news: {
+    overall: string;
+    score: number;
   };
-  fundamental_indicators: {
-    pe_ratio: number;
-    pb_ratio: number;
-    profit_margin: number;
-    revenue_growth: number;
-    debt_to_equity: number;
-    current_ratio: number;
-  };
-  scores: {
-    technical_score: number;
-    momentum_score: number;
-    fundamental_score: number;
-  };
-  total_score: number;
+  overall_score: number;
 }
 
 interface MarketAnalysisProps {
@@ -79,19 +85,7 @@ interface MarketAnalysisProps {
     macro_indicators: { [key: string]: { value: number; change: number; trend: string } };
     news_summary: string;
     potential_stocks: PotentialStock[];
-    market_sentiment: {
-      technical?: {
-        rsi: number;
-        macd_signal: string;
-        trend: string;
-        volatility: number;
-        volume_trend: string;
-      };
-      news?: {
-        overall: string;
-        score: number;
-      };
-    };
+    market_sentiment: MarketSentiment;
     analysis_report: string;
   } | null;
   loading: boolean;
@@ -182,11 +176,23 @@ const MarketAnalysis: React.FC<MarketAnalysisProps> = ({ onAnalyze, result, load
               {Object.entries(result.hot_sectors).map(([name, data]) => (
                 <div key={name} className="border p-4 rounded">
                   <h4 className="font-medium">{name}</h4>
-                  <p className={`${data.change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    涨跌幅: {data.change.toFixed(2)}%
+                  <p className={`${data.price_change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    涨跌幅: {data.price_change.toFixed(2)}%
                   </p>
                   <p className="text-sm text-gray-600">
                     成交量变化: {data.volume_change.toFixed(2)}%
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    RSI: {data.rsi.toFixed(2)}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    动量: {data.momentum.toFixed(2)}%
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    MACD信号: {data.macd_signal}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    趋势强度: {data.trend_strength.toFixed(2)}%
                   </p>
                 </div>
               ))}
@@ -201,9 +207,11 @@ const MarketAnalysis: React.FC<MarketAnalysisProps> = ({ onAnalyze, result, load
                 <div className="border p-4 rounded">
                   <h4 className="font-medium">技术面情绪</h4>
                   <p>RSI: {result.market_sentiment.technical.rsi.toFixed(2)}</p>
-                  <p>MACD信号: {result.market_sentiment.technical.macd_signal}</p>
+                  <p>MACD信号: {result.market_sentiment.technical.macd}</p>
                   <p>趋势: {result.market_sentiment.technical.trend}</p>
                   <p>成交量趋势: {result.market_sentiment.technical.volume_trend}</p>
+                  <p>波动率: {result.market_sentiment.technical.volatility.toFixed(2)}%</p>
+                  <p>技术面得分: {result.market_sentiment.technical.score}</p>
                 </div>
               )}
               {result.market_sentiment.news && (
@@ -213,6 +221,10 @@ const MarketAnalysis: React.FC<MarketAnalysisProps> = ({ onAnalyze, result, load
                   <p>情绪得分: {result.market_sentiment.news.score.toFixed(2)}</p>
                 </div>
               )}
+              <div className="border p-4 rounded md:col-span-2">
+                <h4 className="font-medium">综合情绪得分</h4>
+                <p>{result.market_sentiment.overall_score.toFixed(2)}</p>
+              </div>
             </div>
           </div>
 
@@ -246,13 +258,13 @@ const MarketAnalysis: React.FC<MarketAnalysisProps> = ({ onAnalyze, result, load
                         <div className="text-sm text-gray-600">{stock.name}</div>
                       </td>
                       <td className="px-4 py-2">{stock.sector}</td>
-                      <td className={`px-4 py-2 ${stock.momentum_indicators.price_momentum >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {stock.momentum_indicators.price_momentum.toFixed(2)}%
+                      <td className={`px-4 py-2 ${stock.momentum >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {stock.momentum.toFixed(2)}%
                       </td>
-                      <td className="px-4 py-2">{stock.technical_indicators.rsi.toFixed(2)}</td>
-                      <td className="px-4 py-2">{stock.fundamental_indicators.pe_ratio.toFixed(2)}</td>
-                      <td className="px-4 py-2">{stock.fundamental_indicators.profit_margin.toFixed(2)}%</td>
-                      <td className="px-4 py-2">{stock.total_score.toFixed(2)}</td>
+                      <td className="px-4 py-2">{stock.rsi.toFixed(2)}</td>
+                      <td className="px-4 py-2">{stock.pe_ratio ? stock.pe_ratio.toFixed(2) : 'N/A'}</td>
+                      <td className="px-4 py-2">{stock.profit_margin ? stock.profit_margin.toFixed(2) : 'N/A'}%</td>
+                      <td className="px-4 py-2">{stock.score.toFixed(2)}</td>
                     </tr>
                   ))}
                 </tbody>

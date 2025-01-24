@@ -14,13 +14,22 @@ from pandas_datareader import data as pdr
 import finnhub
 from stockstats import StockDataFrame
 from concurrent.futures import ThreadPoolExecutor
+import time  # 添加time模块用于重试延迟
 
 logger = logging.getLogger(__name__)
+
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (float, np.float64, np.float32)):
+            if np.isnan(obj) or np.isinf(obj):
+                return 0.0
+            return float(obj)
+        return super().default(obj)
 
 class MarketAnalyzer(BaseAgent):
     def __init__(self):
         super().__init__()
-        self.llm_provider = LLMProvider()
+        self.llm_provider = LLMProvider(model="gpt-4o-2024-08-06")  # 指定使用 GPT-4 模型
         self.finnhub_client = None
         self._init_api_clients()
         
@@ -44,43 +53,82 @@ class MarketAnalyzer(BaseAgent):
                 "news_summary": "",
                 "potential_stocks": [],
                 "market_sentiment": {},
-                "analysis_report": ""
+                "analysis_report": "",
+                "progress_updates": []  # 添加进度更新列表
             }
 
             # 1. 获取市场指数数据
             logger.info("Analyzing market indices...")
             result["market_overview"] = self._analyze_market_indices() or {}
+            result["progress_updates"].append({
+                "stage": "market_indices",
+                "message": "已完成市场指数分析",
+                "data": result["market_overview"]
+            })
 
             # 2. 获取市场热点板块
             logger.info("Analyzing sector performance...")
             result["hot_sectors"] = self._analyze_sector_performance() or {}
+            result["progress_updates"].append({
+                "stage": "sector_performance",
+                "message": "已完成板块分析",
+                "data": result["hot_sectors"]
+            })
 
             # 3. 获取宏观经济指标
             logger.info("Analyzing macro indicators...")
             result["macro_indicators"] = self._analyze_macro_indicators() or {}
+            result["progress_updates"].append({
+                "stage": "macro_indicators",
+                "message": "已完成宏观指标分析",
+                "data": result["macro_indicators"]
+            })
 
             # 4. 获取最新金融新闻
             logger.info("Fetching financial news...")
             result["news_summary"] = self._fetch_financial_news() or "暂无最新市场新闻"
+            result["progress_updates"].append({
+                "stage": "financial_news",
+                "message": "已完成新闻分析",
+                "data": result["news_summary"]
+            })
 
             # 5. 筛选潜力股
             logger.info("Screening potential stocks...")
             result["potential_stocks"] = self._screen_potential_stocks() or []
+            result["progress_updates"].append({
+                "stage": "potential_stocks",
+                "message": "已完成潜力股筛选",
+                "data": result["potential_stocks"]
+            })
             
             # 6. 获取市场情绪指标
             logger.info("Analyzing market sentiment...")
             result["market_sentiment"] = self._analyze_market_sentiment() or {}
+            result["progress_updates"].append({
+                "stage": "market_sentiment",
+                "message": "已完成市场情绪分析",
+                "data": result["market_sentiment"]
+            })
 
             # 7. 生成市场分析报告
             logger.info("Generating market report...")
-            result["analysis_report"] = self._generate_market_report(
+            prompt = self._generate_market_report_prompt(
                 result["market_overview"],
                 result["hot_sectors"],
                 result["macro_indicators"],
                 result["news_summary"],
                 result["potential_stocks"],
                 result["market_sentiment"]
-            ) or "暂无市场分析报告"
+            )
+            
+            # 使用同步方式调用LLM
+            result["analysis_report"] = self.llm_provider.generate_response_sync(prompt) or "暂无市场分析报告"
+            result["progress_updates"].append({
+                "stage": "final_report",
+                "message": "已完成市场分析报告",
+                "data": result["analysis_report"]
+            })
 
             logger.info("Market analysis completed successfully")
             return result
@@ -94,53 +142,83 @@ class MarketAnalyzer(BaseAgent):
                 "news_summary": "市场分析过程中出错",
                 "potential_stocks": [],
                 "market_sentiment": {},
-                "analysis_report": f"市场分析过程中出错: {str(e)}"
+                "analysis_report": f"市场分析过程中出错: {str(e)}",
+                "progress_updates": []
             }
+
+    def _sanitize_data(self, data):
+        """递归清理数据中的特殊浮点数值"""
+        if isinstance(data, dict):
+            return {k: self._sanitize_data(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._sanitize_data(item) for item in data]
+        elif isinstance(data, (float, np.float64, np.float32)):
+            if np.isnan(data) or np.isinf(data):
+                return 0.0
+            return float(data)
+        return data
 
     def _analyze_market_indices(self):
         """分析主要市场指数"""
         indices = {
-            '^GSPC': 'S&P 500',
-            '^DJI': '道琼斯工业平均指数',
-            '^IXIC': '纳斯达克综合指数',
-            '^VIX': 'VIX波动率指数',
-            '^TNX': '10年期国债收益率',
-            'GC=F': '黄金期货',
-            'CL=F': '原油期货',
-            'EURUSD=X': '欧元/美元',
+            'SPY': 'S&P 500 ETF',  # 使用SPY ETF替代^GSPC
+            'DIA': '道琼斯工业平均指数ETF',  # 使用DIA ETF替代^DJI
+            'QQQ': '纳斯达克100ETF',  # 使用QQQ ETF替代^IXIC
+            'UVXY': 'VIX波动率ETF',  # 使用UVXY ETF替代^VIX
+            'TLT': '20年期国债ETF',  # 使用TLT ETF替代^TNX
+            'GLD': '黄金ETF',  # 使用GLD ETF替代GC=F
+            'USO': '原油ETF',  # 使用USO ETF替代CL=F
+            'FXE': '欧元ETF'  # 使用FXE ETF替代EURUSD=X
         }
         
         market_data = {}
         for symbol, name in indices.items():
-            try:
-                index = yf.Ticker(symbol)
-                hist = index.history(period="6mo")
-                if not hist.empty:
-                    # 基础指标
-                    last_close = hist['Close'].iloc[-1]
-                    prev_close = hist['Close'].iloc[-2]
-                    month_ago = hist['Close'].iloc[-22] if len(hist) >= 22 else hist['Close'].iloc[0]
+            for attempt in range(3):  # 最多重试3次
+                try:
+                    logger.info(f"Fetching data for {name} ({symbol}), attempt {attempt + 1}")
+                    index = yf.Ticker(symbol)
+                    hist = index.history(period="6mo", timeout=10)  # 设置较短的超时时间
                     
-                    # 技术指标
-                    sma_20 = ta.trend.sma_indicator(hist['Close'], window=20).iloc[-1]
-                    sma_50 = ta.trend.sma_indicator(hist['Close'], window=50).iloc[-1]
-                    rsi = ta.momentum.rsi(hist['Close'], window=14).iloc[-1]
-                    macd = ta.trend.macd_diff(hist['Close']).iloc[-1]
+                    if not hist.empty:
+                        # 基础指标
+                        last_close = self._sanitize_data(hist['Close'].iloc[-1])
+                        prev_close = self._sanitize_data(hist['Close'].iloc[-2])
+                        month_ago = self._sanitize_data(hist['Close'].iloc[-22] if len(hist) >= 22 else hist['Close'].iloc[0])
+                        
+                        # 技术指标
+                        sma_20 = self._sanitize_data(ta.trend.sma_indicator(hist['Close'], window=20).iloc[-1])
+                        sma_50 = self._sanitize_data(ta.trend.sma_indicator(hist['Close'], window=50).iloc[-1])
+                        rsi = self._sanitize_data(ta.momentum.rsi(hist['Close'], window=14).iloc[-1])
+                        macd = self._sanitize_data(ta.trend.macd_diff(hist['Close']).iloc[-1])
+                        
+                        # 计算变化率时防止除以0
+                        daily_change = self._sanitize_data(((last_close / prev_close) - 1) * 100 if prev_close != 0 else 0)
+                        monthly_change = self._sanitize_data(((last_close / month_ago) - 1) * 100 if month_ago != 0 else 0)
+                        sma20_diff = self._sanitize_data(((last_close / sma_20) - 1) * 100 if sma_20 != 0 else 0)
+                        sma50_diff = self._sanitize_data(((last_close / sma_50) - 1) * 100 if sma_50 != 0 else 0)
+                        
+                        market_data[name] = {
+                            'current': round(last_close, 2),
+                            'daily_change': round(daily_change, 2),
+                            'monthly_change': round(monthly_change, 2),
+                            'volatility': round(self._sanitize_data(hist['Close'].pct_change().std() * 100), 2),
+                            'sma20_diff': round(sma20_diff, 2),
+                            'sma50_diff': round(sma50_diff, 2),
+                            'rsi': round(rsi, 2),
+                            'macd': round(macd, 4)
+                        }
+                        logger.info(f"Successfully analyzed {name}")
+                        break  # 成功获取数据后跳出重试循环
+                        
+                    else:
+                        logger.warning(f"No data available for {name} ({symbol})")
+                        
+                except Exception as e:
+                    logger.error(f"Error analyzing index {symbol} (attempt {attempt + 1}): {str(e)}")
+                    if attempt == 2:  # 最后一次尝试失败
+                        continue
+                    time.sleep(2 ** attempt)  # 指数退避
                     
-                    market_data[name] = {
-                        'current': round(last_close, 2),
-                        'daily_change': round(((last_close / prev_close) - 1) * 100, 2),
-                        'monthly_change': round(((last_close / month_ago) - 1) * 100, 2),
-                        'volatility': round(hist['Close'].pct_change().std() * 100, 2),
-                        'sma20_diff': round(((last_close / sma_20) - 1) * 100, 2),
-                        'sma50_diff': round(((last_close / sma_50) - 1) * 100, 2),
-                        'rsi': round(rsi, 2),
-                        'macd': round(macd, 4)
-                    }
-            except Exception as e:
-                logger.error(f"Error analyzing index {symbol}: {str(e)}")
-                continue
-                
         return market_data
 
     def _analyze_macro_indicators(self):
@@ -188,379 +266,177 @@ class MarketAnalyzer(BaseAgent):
             return {}
 
     def _analyze_market_sentiment(self):
-        """分析市场情绪指标"""
+        """分析市场情绪"""
         try:
-            sentiment_data = {
-                'technical': self._analyze_technical_sentiment(),
-                'news': self._analyze_news_sentiment(),
-                'options': self._analyze_options_sentiment(),
-                'insider': self._analyze_insider_trading()
-            }
-            return sentiment_data
-        except Exception as e:
-            logger.error(f"Sentiment analysis error: {str(e)}")
-            return {}
-
-    def _analyze_technical_sentiment(self):
-        """分析技术面情绪"""
-        try:
-            spy = yf.Ticker("SPY")
-            hist = spy.history(period="3mo")
+            # 分析技术面情绪
+            spy = yf.Ticker('SPY')
+            hist = spy.history(period='1mo')
             
             if not hist.empty:
-                # 计算技术指标
-                close = hist['Close']
-                volume = hist['Volume']
+                # 计算RSI
+                rsi = ta.momentum.rsi(hist['Close'], window=14).iloc[-1]
                 
-                # 动量指标
-                rsi = ta.momentum.RSIIndicator(close).rsi()
-                macd = ta.trend.MACD(close)
+                # 计算MACD
+                macd = ta.trend.macd_diff(hist['Close'])
+                macd_signal = 'bullish' if macd.iloc[-1] > 0 else 'bearish'
                 
-                # 趋势指标
-                sma20 = ta.trend.SMAIndicator(close, window=20).sma_indicator()
-                sma50 = ta.trend.SMAIndicator(close, window=50).sma_indicator()
+                # 计算趋势
+                sma_20 = ta.trend.sma_indicator(hist['Close'], window=20).iloc[-1]
+                sma_50 = ta.trend.sma_indicator(hist['Close'], window=50).iloc[-1]
+                current_price = hist['Close'].iloc[-1]
                 
-                # 波动率指标
-                bbands = ta.volatility.BollingerBands(close)
-                atr = ta.volatility.AverageTrueRange(hist['High'], hist['Low'], close)
-                
-                # 成交量指标
-                volume_sma = ta.trend.SMAIndicator(volume, window=20).sma_indicator()
-                
-                latest_close = close.iloc[-1]
-                
-                return {
-                    'rsi': round(rsi.iloc[-1], 2),
-                    'macd_signal': 'bullish' if macd.macd_diff().iloc[-1] > 0 else 'bearish',
-                    'trend': 'bullish' if latest_close > sma20.iloc[-1] > sma50.iloc[-1] else 'bearish',
-                    'volatility': round(atr.average_true_range().iloc[-1], 2),
-                    'volume_trend': 'up' if volume.iloc[-1] > volume_sma.iloc[-1] else 'down'
-                }
-        except Exception as e:
-            logger.error(f"Technical sentiment analysis error: {str(e)}")
-            return {}
-
-    def _analyze_options_sentiment(self):
-        """分析期权市场情绪"""
-        try:
-            if not self.finnhub_client:
-                return {}
-                
-            # 获取SPY的期权数据
-            options_data = self.finnhub_client.stock_option_chain('SPY')
-            
-            if not options_data:
-                return {}
-                
-            calls_volume = 0
-            puts_volume = 0
-            
-            for chain in options_data.get('data', []):
-                if chain.get('type') == 'call':
-                    calls_volume += chain.get('volume', 0)
+                if current_price > sma_20 and sma_20 > sma_50:
+                    trend = 'bullish'
+                elif current_price < sma_20 and sma_20 < sma_50:
+                    trend = 'bearish'
                 else:
-                    puts_volume += chain.get('volume', 0)
+                    trend = 'neutral'
+                
+                # 计算成交量趋势
+                avg_volume = hist['Volume'].rolling(window=20).mean()
+                volume_trend = 'up' if hist['Volume'].iloc[-1] > avg_volume.iloc[-1] else 'down'
+                
+                # 计算波动率
+                volatility = hist['Close'].pct_change().std() * np.sqrt(252) * 100
+                
+                # 计算技术面综合得分 (0-100)
+                technical_score = 0
+                if rsi < 30:  # 超卖
+                    technical_score += 30
+                elif rsi > 70:  # 超买
+                    technical_score += 10
+                else:
+                    technical_score += 20
                     
-            put_call_ratio = puts_volume / calls_volume if calls_volume > 0 else 0
+                if macd_signal == 'bullish':
+                    technical_score += 20
+                    
+                if trend == 'bullish':
+                    technical_score += 30
+                elif trend == 'neutral':
+                    technical_score += 15
+                    
+                if volume_trend == 'up':
+                    technical_score += 20
+                
+                technical_sentiment = {
+                    'rsi': round(rsi, 2),
+                    'macd': macd_signal,
+                    'trend': trend,
+                    'volume_trend': volume_trend,
+                    'volatility': round(volatility, 2),
+                    'score': technical_score
+                }
+            else:
+                technical_sentiment = {
+                    'rsi': 50,
+                    'macd': 'neutral',
+                    'trend': 'neutral',
+                    'volume_trend': 'neutral',
+                    'volatility': 0,
+                    'score': 50
+                }
+            
+            # 获取新闻情绪
+            news_sentiment = self._analyze_news_sentiment()
             
             return {
-                'put_call_ratio': round(put_call_ratio, 2),
-                'sentiment': 'bearish' if put_call_ratio > 1 else 'bullish',
-                'calls_volume': calls_volume,
-                'puts_volume': puts_volume
+                'technical': technical_sentiment,
+                'news': news_sentiment,
+                'overall_score': round((technical_sentiment['score'] + news_sentiment.get('score', 50) * 100) / 2, 2)
             }
             
         except Exception as e:
-            logger.error(f"Options sentiment analysis error: {str(e)}")
-            return {}
-
-    def _analyze_insider_trading(self):
-        """分析内部交易情况"""
-        try:
-            if not self.finnhub_client:
-                return {}
-                
-            # 获取S&P 500公司的内部交易数据
-            insider_sentiment = {}
-            
-            for symbol in ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META']:  # 示例使用主要科技股
-                try:
-                    data = self.finnhub_client.stock_insider_sentiment(symbol, 
-                        datetime.now().strftime('%Y-%m-%d'), 
-                        (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
-                        
-                    if data and data.get('data'):
-                        sentiment = data['data'][0]
-                        insider_sentiment[symbol] = {
-                            'mspr': round(sentiment.get('mspr', 0), 2),  # 月度价格变动率
-                            'change': round(sentiment.get('change', 0), 2),  # 内部持股变动
-                            'sentiment': 'positive' if sentiment.get('mspr', 0) > 0 else 'negative'
-                        }
-                except Exception as e:
-                    logger.error(f"Error fetching insider data for {symbol}: {str(e)}")
-                    continue
-                    
-            return insider_sentiment
-            
-        except Exception as e:
-            logger.error(f"Insider trading analysis error: {str(e)}")
-            return {}
-
-    def _screen_potential_stocks(self):
-        """筛选潜力股"""
-        try:
-            # 使用多个数据源获取股票池
-            stock_universe = self._get_stock_universe()
-            
-            potential_stocks = []
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = [executor.submit(self._analyze_single_stock, symbol) 
-                          for symbol in stock_universe[:50]]  # 限制分析前50只股票
-                
-                for future in futures:
-                    result = future.result()
-                    if result:
-                        potential_stocks.append(result)
-            
-            # 按评分排序
-            potential_stocks.sort(key=lambda x: x['total_score'], reverse=True)
-            return potential_stocks[:10]  # 返回前10只最具潜力的股票
-            
-        except Exception as e:
-            logger.error(f"Stock screening error: {str(e)}")
-            return []
-
-    def _get_stock_universe(self):
-        """获取股票池"""
-        try:
-            # 尝试获取S&P 500成分股
-            sp500 = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
-            return sp500['Symbol'].tolist()
-        except Exception as e:
-            logger.error(f"Error fetching stock universe: {str(e)}")
-            # 返回备用股票列表
-            return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 
-                   'JPM', 'V', 'JNJ', 'WMT', 'PG', 'MA', 'UNH', 'HD']
-
-    def _analyze_single_stock(self, symbol):
-        """分析单个股票"""
-        try:
-            logger.info(f"Analyzing stock {symbol}...")
-            
-            # 使用 yfinance 获取股票数据
-            stock = yf.Ticker(symbol)
-            
-            # 获取历史数据
-            hist = stock.history(period="6mo")
-            if hist.empty:
-                logger.warning(f"No historical data available for {symbol}")
-                return None
-                
-            # 获取股票信息
-            info = stock.info
-            if not info:
-                logger.warning(f"No stock info available for {symbol}")
-                return None
-                
-            # 检查必需的数据列
-            required_columns = ['Close', 'High', 'Low', 'Volume']
-            if not all(col in hist.columns for col in required_columns):
-                logger.error(f"Missing required columns for {symbol}")
-                return None
-                
-            # 检查是否有足够的数据点
-            if len(hist) < 20:  # 至少需要20个交易日的数据
-                logger.warning(f"Insufficient historical data for {symbol}")
-                return None
-                
-            # 确保数据有效
-            if hist['Close'].isnull().any():
-                logger.warning(f"Found null values in Close prices for {symbol}")
-                return None
-                
-            # 计算技术指标
-            try:
-                # 使用 ta 库计算基本技术指标
-                close_prices = hist['Close']
-                technical_indicators = {
-                    'rsi': float(ta.momentum.RSIIndicator(close_prices).rsi().iloc[-1]),
-                    'macd': float(ta.trend.MACD(close_prices).macd_diff().iloc[-1]),
-                    'sma_20': float(ta.trend.SMAIndicator(close_prices, window=20).sma_indicator().iloc[-1]),
-                    'sma_50': float(ta.trend.SMAIndicator(close_prices, window=50).sma_indicator().iloc[-1]),
-                    'close': float(close_prices.iloc[-1])
-                }
-            except Exception as e:
-                logger.error(f"Error calculating technical indicators for {symbol}: {str(e)}")
-                return None
-            
-            # 计算动量指标
-            try:
-                momentum_indicators = {
-                    'price_momentum': float(((hist['Close'].iloc[-1] / hist['Close'].iloc[-20]) - 1) * 100),
-                    'volume_momentum': float(((hist['Volume'].iloc[-5:].mean() / hist['Volume'].iloc[-20:-5].mean()) - 1) * 100)
-                }
-            except Exception as e:
-                logger.error(f"Error calculating momentum indicators for {symbol}: {str(e)}")
-                return None
-            
-            # 获取基本面指标
-            fundamental_indicators = {
-                'pe_ratio': float(info.get('forwardPE', 0) or 0),
-                'pb_ratio': float(info.get('priceToBook', 0) or 0),
-                'profit_margin': float(info.get('profitMargins', 0) or 0) * 100,
-                'revenue_growth': float(info.get('revenueGrowth', 0) or 0) * 100,
-                'debt_to_equity': float(info.get('debtToEquity', 0) or 0),
-                'current_ratio': float(info.get('currentRatio', 0) or 0)
+            logger.error(f"Market sentiment analysis error: {str(e)}")
+            return {
+                'technical': {
+                    'rsi': 50,
+                    'macd': 'neutral',
+                    'trend': 'neutral',
+                    'volume_trend': 'neutral',
+                    'volatility': 0,
+                    'score': 50
+                },
+                'news': {
+                    'overall': 'neutral',
+                    'score': 0.5
+                },
+                'overall_score': 50
             }
-            
-            # 计算综合评分
-            scores = {
-                'technical_score': self._calculate_technical_score(technical_indicators),
-                'momentum_score': self._calculate_momentum_score(momentum_indicators),
-                'fundamental_score': self._calculate_fundamental_score(fundamental_indicators)
-            }
-            
-            total_score = sum(scores.values()) / len(scores)
-            
-            # 只返回评分达到标准的股票
-            if total_score >= 60:
-                return {
-                    'symbol': symbol,
-                    'name': info.get('longName', symbol),
-                    'sector': info.get('sector', 'Unknown'),
-                    'industry': info.get('industry', 'Unknown'),
-                    'technical_indicators': technical_indicators,
-                    'momentum_indicators': momentum_indicators,
-                    'fundamental_indicators': fundamental_indicators,
-                    'scores': scores,
-                    'total_score': round(total_score, 2)
-                }
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error analyzing stock {symbol}: {str(e)}", exc_info=True)
-            return None
-
-    def _calculate_technical_score(self, indicators):
-        """计算技术分析得分"""
-        score = 0
-        
-        try:
-            # RSI指标评分 (0-40)
-            rsi = indicators['rsi']
-            if 40 <= rsi <= 60:  # 中性区间
-                score += 20
-            elif (30 <= rsi < 40) or (60 < rsi <= 70):  # 临界区间
-                score += 15
-            elif rsi < 30:  # 超卖区间
-                score += 10
-            
-            # MACD评分 (0-30)
-            macd = indicators['macd']
-            if macd > 0:
-                score += 15
-                if macd > indicators['close'] * 0.01:  # MACD值超过收盘价的1%
-                    score += 15
-            
-            # 均线评分 (0-30)
-            current_price = indicators['close']
-            sma_20 = indicators['sma_20']
-            sma_50 = indicators['sma_50']
-            
-            # 判断均线多头排列
-            if current_price > sma_20 > sma_50:
-                score += 30
-            elif current_price > sma_20:
-                score += 15
-            elif current_price > sma_50:
-                score += 10
-            
-            return min(score, 100)  # 确保分数不超过100
-            
-        except Exception as e:
-            logger.error(f"Error calculating technical score: {str(e)}")
-            return 0
-
-    def _calculate_momentum_score(self, indicators):
-        """计算动量得分"""
-        score = 0
-        
-        # 价格动量评分
-        price_momentum = indicators['price_momentum']
-        if price_momentum > 0:
-            score += 25
-        elif price_momentum > -5:
-            score += 15
-            
-        # 成交量动量评分
-        volume_momentum = indicators['volume_momentum']
-        if volume_momentum > 0:
-            score += 25
-        elif volume_momentum > -10:
-            score += 15
-            
-        return score
-
-    def _calculate_fundamental_score(self, indicators):
-        """计算基本面得分"""
-        score = 0
-        
-        # PE评分
-        pe = indicators['pe_ratio']
-        if 0 < pe < 30:
-            score += 20
-        elif 30 <= pe < 50:
-            score += 10
-            
-        # 利润率评分
-        profit_margin = indicators['profit_margin']
-        if profit_margin > 20:
-            score += 20
-        elif profit_margin > 10:
-            score += 10
-            
-        # 收入增长评分
-        revenue_growth = indicators['revenue_growth']
-        if revenue_growth > 20:
-            score += 20
-        elif revenue_growth > 10:
-            score += 10
-            
-        return score
 
     def _analyze_sector_performance(self):
-        """分析各个行业板块表现"""
-        try:
-            sectors = [
-                'XLK',  # 科技
-                'XLF',  # 金融
-                'XLV',  # 医疗保健
-                'XLE',  # 能源
-                'XLI',  # 工业
-                'XLC',  # 通信服务
-                'XLP',  # 日常消费品
-                'XLY',  # 非必需消费品
-                'XLB',  # 材料
-                'XLRE'  # 房地产
-            ]
-            
-            sector_performance = {}
-            for symbol in sectors:
-                etf = yf.Ticker(symbol)
-                hist = etf.history(period="1mo")
+        """分析行业板块表现"""
+        sectors = {
+            'XLK': '科技板块',
+            'XLF': '金融板块',
+            'XLV': '医疗保健板块',
+            'XLE': '能源板块',
+            'XLI': '工业板块',
+            'XLC': '通信服务板块',
+            'XLY': '非必需消费品板块',
+            'XLB': '材料板块',
+            'XLRE': '房地产板块',
+            'XLP': '必需消费品板块',
+            'XLU': '公用事业板块'
+        }
+        
+        sector_data = {}
+        for symbol, name in sectors.items():
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period="5d")  # 获取5天的数据以计算更准确的变化
+                
                 if not hist.empty:
-                    info = etf.info
-                    sector_performance[info.get('shortName', symbol)] = {
-                        'change': ((hist['Close'].iloc[-1] / hist['Close'].iloc[0]) - 1) * 100,
-                        'volume_change': ((hist['Volume'].iloc[-1] / hist['Volume'].mean()) - 1) * 100
+                    # 计算涨跌幅（使用收盘价）
+                    last_close = self._sanitize_data(hist['Close'].iloc[-1])
+                    prev_close = self._sanitize_data(hist['Close'].iloc[-2])
+                    price_change = ((last_close / prev_close - 1) * 100) if prev_close != 0 else 0
+                    
+                    # 计算成交量变化
+                    last_volume = self._sanitize_data(hist['Volume'].iloc[-1])
+                    avg_volume = self._sanitize_data(hist['Volume'].iloc[:-1].mean())
+                    volume_change = ((last_volume / avg_volume - 1) * 100) if avg_volume != 0 else 0
+                    
+                    # 计算动量（5日变化）
+                    five_day_start = self._sanitize_data(hist['Close'].iloc[0])
+                    momentum = ((last_close / five_day_start - 1) * 100) if five_day_start != 0 else 0
+                    
+                    # 计算相对强弱（RSI）
+                    rsi = self._sanitize_data(ta.momentum.rsi(hist['Close'], window=14).iloc[-1])
+                    
+                    # 计算MACD
+                    macd = ta.trend.macd_diff(hist['Close'])
+                    macd_signal = 'bullish' if macd.iloc[-1] > 0 else 'bearish'
+                    
+                    # 计算趋势强度
+                    sma_20 = ta.trend.sma_indicator(hist['Close'], window=20).iloc[-1]
+                    trend_strength = ((last_close / sma_20 - 1) * 100) if sma_20 != 0 else 0
+                    
+                    sector_data[name] = {
+                        'symbol': symbol,
+                        'price_change': round(price_change, 2),
+                        'volume_change': round(volume_change, 2),
+                        'momentum': round(momentum, 2),
+                        'rsi': round(rsi, 2),
+                        'current_price': round(last_close, 2),
+                        'macd_signal': macd_signal,
+                        'trend_strength': round(trend_strength, 2),
+                        'trend': 'up' if price_change > 0 else 'down' if price_change < 0 else 'neutral',
+                        'volume_trend': 'up' if volume_change > 0 else 'down'
                     }
-            
-            return sector_performance
-            
-        except Exception as e:
-            logger.error(f"Sector analysis error: {str(e)}")
-            return {}
+                    
+            except Exception as e:
+                logger.error(f"Error analyzing sector {symbol}: {str(e)}")
+                continue
+                
+        # 按涨跌幅排序
+        sorted_sectors = dict(sorted(
+            sector_data.items(),
+            key=lambda x: x[1]['price_change'],
+            reverse=True
+        ))
+        
+        return sorted_sectors
 
     def _analyze_news_sentiment(self):
         """分析新闻情绪"""
@@ -620,51 +496,40 @@ class MarketAnalyzer(BaseAgent):
             }
 
     def _fetch_financial_news(self):
-        """获取并分析最新金融新闻"""
+        """获取最新金融新闻"""
         try:
-            # 使用 Alpha Vantage API 获取新闻
-            api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
-            if not api_key:
-                logger.warning("Alpha Vantage API key not found")
-                # 使用备用新闻源
+            if not self.finnhub_client:
                 return self._fetch_backup_news()
-                
-            url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={api_key}&topics=technology,earnings,ipo,financial_markets,economy_macro"
-            response = requests.get(url)
-            if response.status_code == 200:
-                data = response.json()
-                news_list = data.get('feed', [])[:10]  # 获取最新的10条新闻
-            else:
-                logger.warning(f"Failed to fetch news from Alpha Vantage: {response.status_code}")
+            
+            # 获取市场新闻
+            news = self.finnhub_client.general_news('general', min_id=0)
+            if not news:
                 return self._fetch_backup_news()
-
-            # 准备新闻摘要
-            news_summary = []
-            for item in news_list:
-                title = item.get('title', '')
-                summary = item.get('summary', '')
-                sentiment = item.get('overall_sentiment_score', 0)
-                news_summary.append({
-                    'title': title,
-                    'summary': summary,
-                    'sentiment': sentiment
+            
+            # 处理新闻数据
+            news_data = []
+            for item in news[:50]:  # 只取最新的50条新闻
+                news_data.append({
+                    'title': item.get('headline', ''),
+                    'summary': item.get('summary', ''),
+                    'source': item.get('source', ''),
+                    'url': item.get('url', '')
                 })
-
+            
             # 使用LLM分析新闻
-            news_prompt = f"""请基于以下最新的市场新闻，进行深入分析并提供见解：
+            news_prompt = f"""请基于以下最新的市场新闻进行分析，生成一份简洁的总结。注意：请使用清晰的自然语言，不要使用任何特殊格式或标记。
 
 最新新闻：
-{json.dumps(news_summary, ensure_ascii=False, indent=2)}
+{json.dumps(news_data, ensure_ascii=False, indent=2)}
 
-请分析以下方面：
-1. 主要市场趋势和热点
-2. 整体市场情绪（看多/看空/中性）
-3. 值得关注的重要事件及其潜在影响
-4. 可能影响市场的风险因素
+请分析以下几点：
+1. 主要市场趋势
+2. 整体市场情绪
+3. 重要事件及影响
 
-请用清晰的语言表达，避免使用任何特殊格式。重点关注这些新闻对投资者的实际影响。"""
+请直接输出分析内容，使用简单的自然语言，不要使用任何标题、序号或特殊格式。"""
             
-            return self.llm_provider.generate_response(prompt=news_prompt)
+            return self.llm_provider.generate_response_sync(prompt=news_prompt)
             
         except Exception as e:
             logger.error(f"News fetching error: {str(e)}")
@@ -678,7 +543,7 @@ class MarketAnalyzer(BaseAgent):
             response = requests.get(url)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'xml')
-                items = soup.find_all('item')[:5]  # 获取最新的5条新闻
+                items = soup.find_all('item')[:10]  # 获取最新的10条新闻
                 
                 news_summary = []
                 for item in items:
@@ -702,7 +567,7 @@ class MarketAnalyzer(BaseAgent):
 
 请用清晰的语言表达，避免使用任何特殊格式。"""
                 
-                return self.llm_provider.generate_response(prompt=backup_prompt)
+                return self.llm_provider.generate_response_sync(prompt=backup_prompt)
             
             else:
                 return "目前无法获取最新市场新闻，建议稍后再试。"
@@ -711,57 +576,195 @@ class MarketAnalyzer(BaseAgent):
             logger.error(f"Backup news fetching error: {str(e)}")
             return "目前无法获取最新市场新闻，建议稍后再试。"
 
-    def _generate_market_report(self, market_data, hot_sectors, macro_data, news_data, potential_stocks, sentiment_data):
-        """生成市场分析报告"""
+    def _generate_market_report_prompt(self, market_data, hot_sectors, macro_data, news_summary, potential_stocks, sentiment_data):
+        """生成市场分析报告的提示词"""
+        # 格式化板块数据
+        formatted_sectors = []
+        for name, data in hot_sectors.items():
+            formatted_sectors.append(f"{name}:\n"
+                                  f"- 涨跌幅: {data['price_change']}%\n"
+                                  f"- 成交量变化: {data['volume_change']}%\n"
+                                  f"- RSI: {data['rsi']}\n"
+                                  f"- 动量: {data['momentum']}%\n"
+                                  f"- MACD信号: {data['macd_signal']}\n"
+                                  f"- 趋势强度: {data['trend_strength']}%")
+
+        # 格式化宏观数据
+        formatted_macro = []
+        for indicator, data in macro_data.items():
+            formatted_macro.append(f"{indicator}:\n"
+                                f"- 当前值: {data['value']}\n"
+                                f"- 变化: {data['change']}\n"
+                                f"- 趋势: {data['trend']}")
+
+        return f"""请基于以下市场数据生成一份详细的市场分析报告。注意：请使用清晰的自然语言，不要使用任何特殊格式或标记。
+
+市场数据：
+
+1. 市场指数概况：
+{json.dumps(market_data, indent=2, ensure_ascii=False)}
+
+2. 热门行业板块：
+{''.join(formatted_sectors)}
+
+3. 宏观经济指标：
+{''.join(formatted_macro)}
+
+4. 市场新闻摘要：
+{news_summary}
+
+5. 潜力股票：
+{json.dumps(potential_stocks, indent=2, ensure_ascii=False)}
+
+6. 市场情绪指标：
+技术面情绪：
+- RSI: {sentiment_data.get('technical', {}).get('rsi', 'N/A')}
+- MACD: {sentiment_data.get('technical', {}).get('macd', 'N/A')}
+- 趋势: {sentiment_data.get('technical', {}).get('trend', 'N/A')}
+- 成交量趋势: {sentiment_data.get('technical', {}).get('volume_trend', 'N/A')}
+
+新闻情绪：
+- 整体情绪: {sentiment_data.get('news', {}).get('overall', 'N/A')}
+- 情绪得分: {sentiment_data.get('news', {}).get('score', 'N/A')}
+
+请从以下几个方面进行分析，使用简单的自然语言，不要使用任何标题、序号或特殊格式：
+
+1. 市场整体趋势和关键风险
+2. 行业机会和投资主题
+3. 宏观经济影响
+4. 投资策略建议"""
+
+    def _screen_potential_stocks(self):
+        """筛选潜力股票"""
         try:
-            # 准备报告数据
-            report_prompt = f"""请基于以下数据生成一份市场分析报告，使用清晰的文字格式（不使用markdown）：
-
-市场指数表现：
-{json.dumps(market_data, ensure_ascii=False, indent=2)}
-
-宏观经济指标：
-{json.dumps(macro_data, ensure_ascii=False, indent=2)}
-
-热门行业板块：
-{json.dumps(hot_sectors, ensure_ascii=False, indent=2)}
-
-最新市场新闻：
-{news_data}
-
-市场情绪指标：
-{json.dumps(sentiment_data, ensure_ascii=False, indent=2)}
-
-潜力股票：
-{json.dumps(potential_stocks, ensure_ascii=False, indent=2)}
-
-请分析以下方面：
-1. 市场整体趋势和投资机会
-2. 最具潜力的行业板块
-3. 推荐关注的潜力股及理由
-4. 风险提示
-
-请用清晰的语言表达，避免使用任何特殊格式。"""
-
-            return self.llm_provider.generate_response(prompt=report_prompt)
+            # 使用S&P 500成分股作为基础股票池
+            sp500_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+            tables = pd.read_html(sp500_url)
+            sp500_stocks = tables[0]['Symbol'].tolist()[:50]  # 限制为前50只股票以提高性能
+            
+            potential_stocks = []
+            for symbol in sp500_stocks:
+                for attempt in range(3):  # 最多重试3次
+                    try:
+                        logger.info(f"Analyzing stock {symbol} (attempt {attempt + 1})")
+                        # 获取股票数据，设置较短的超时时间
+                        stock = yf.Ticker(symbol)
+                        hist = stock.history(period="6mo", timeout=10)
+                        info = stock.info
+                        
+                        if hist.empty or not info:
+                            logger.warning(f"No data available for {symbol}")
+                            break  # 如果没有数据，直接跳过这只股票
+                            
+                        # 计算技术指标
+                        close_prices = hist['Close']
+                        rsi = ta.momentum.rsi(close_prices, window=14).iloc[-1]
+                        macd = ta.trend.macd_diff(close_prices).iloc[-1]
+                        sma_20 = ta.trend.sma_indicator(close_prices, window=20).iloc[-1]
+                        sma_50 = ta.trend.sma_indicator(close_prices, window=50).iloc[-1]
+                        
+                        # 计算动量
+                        momentum = ((close_prices.iloc[-1] / close_prices.iloc[-20]) - 1) * 100
+                        
+                        # 获取基本面数据
+                        pe_ratio = info.get('forwardPE', 0)
+                        profit_margin = info.get('profitMargins', 0)
+                        if profit_margin:
+                            profit_margin = profit_margin * 100
+                        
+                        # 评分系统
+                        score = 0
+                        
+                        # RSI评分 (0-20分)
+                        if 40 <= rsi <= 60:
+                            score += 20
+                        elif 30 <= rsi < 40 or 60 < rsi <= 70:
+                            score += 15
+                        elif rsi < 30:  # 超卖
+                            score += 10
+                        
+                        # MACD评分 (0-20分)
+                        if macd > 0:
+                            score += 20
+                        
+                        # 均线评分 (0-20分)
+                        if close_prices.iloc[-1] > sma_20 > sma_50:
+                            score += 20
+                        elif close_prices.iloc[-1] > sma_20:
+                            score += 10
+                        
+                        # 动量评分 (0-20分)
+                        if momentum > 0:
+                            score += 20
+                        elif momentum > -5:
+                            score += 10
+                        
+                        # 基本面评分 (0-20分)
+                        if 0 < pe_ratio < 30:
+                            score += 10
+                        if profit_margin > 10:
+                            score += 10
+                        
+                        # 只添加评分大于60的股票
+                        if score >= 60:
+                            stock_data = {
+                                'symbol': symbol,
+                                'name': info.get('longName', symbol),
+                                'sector': info.get('sector', 'Unknown'),
+                                'momentum': round(momentum, 2),
+                                'rsi': round(rsi, 2),
+                                'pe_ratio': round(pe_ratio, 2) if pe_ratio else None,
+                                'profit_margin': round(profit_margin, 2) if profit_margin else None,
+                                'score': score,
+                                'current_price': round(close_prices.iloc[-1], 2),
+                                'volume': int(hist['Volume'].iloc[-1]),
+                                'market_cap': info.get('marketCap', 0)
+                            }
+                            potential_stocks.append(stock_data)
+                            
+                        break  # 成功获取数据后跳出重试循环
+                        
+                    except Exception as e:
+                        logger.error(f"Error analyzing stock {symbol} (attempt {attempt + 1}): {str(e)}")
+                        if attempt == 2:  # 最后一次尝试失败
+                            continue
+                        time.sleep(2 ** attempt)  # 指数退避
+            
+            # 按评分排序
+            potential_stocks.sort(key=lambda x: x['score'], reverse=True)
+            return potential_stocks[:10]  # 返回评分最高的10只股票
             
         except Exception as e:
-            logger.error(f"Report generation error: {str(e)}")
-            return "无法生成市场分析报告"
+            logger.error(f"Error in stock screening: {str(e)}")
+            return []
 
     def handle_task(self, task):
-        if task.task_type != "analyze_market":
-            return f"Unsupported task type: {task.task_type}"
-            
-        result = self.analyze_market()
-        
-        # 确保结果可以被JSON序列化
+        """处理任务"""
         try:
-            json.dumps(result)
-            return result
+            if task.task_type != "analyze_market":
+                return {"error": f"Unsupported task type: {task.task_type}"}
+                
+            # 执行市场分析
+            result = self.analyze_market()
+            
+            # 清理并序列化结果
+            sanitized_result = self._sanitize_data(result)
+            
+            # 使用自定义编码器进行JSON序列化测试
+            try:
+                json.dumps(sanitized_result, cls=CustomJSONEncoder)
+                return {"status": "success", "data": sanitized_result}
+            except Exception as e:
+                logger.error(f"Error serializing result: {e}")
+                return {
+                    "status": "error",
+                    "error": "数据序列化失败",
+                    "message": str(e)
+                }
         except Exception as e:
-            logger.error(f"Error serializing result: {e}")
+            logger.error(f"Error in handle_task: {e}")
             return {
-                "error": "数据序列化失败",
+                "status": "error",
+                "error": "任务处理失败",
                 "message": str(e)
             } 

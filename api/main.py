@@ -1,6 +1,7 @@
 import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from agents.document_agent import DocumentAgent
@@ -9,7 +10,8 @@ from core.llm_provider import LLMProvider
 from agents.data_analyzer import DataAnalyzer
 from agents.stock_analyzer import StockAnalyzer
 from agents.investment_advisor import InvestmentAdvisor
-from agents.market_analyzer import MarketAnalyzer
+from agents.market_analyzer import MarketAnalyzer, CustomJSONEncoder
+import json
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -116,22 +118,31 @@ async def handle_task(task: Task):
         if task.task_type == "analyze_document":
             agent = DocumentAgent()
             result = await agent.handle_task(task)
-            return {"status": "success", "data": result}
+            return JSONResponse(content={"status": "success", "data": result})
             
         elif task.task_type == "analyze_investment":
             agent = InvestmentAdvisor()
             symbols = task.kwargs.get("symbols", [])
             result = await agent.analyze_investment(symbols)
-            return {"status": "success", "data": result}
+            return JSONResponse(content={"status": "success", "data": result})
             
         elif task.task_type == "analyze_market":
             agent = MarketAnalyzer()
-            result = await agent.analyze_market()
-            return {"status": "success", "data": result}
+            result = agent.handle_task(task)
+            # 使用自定义JSON编码器预处理数据
+            content = json.loads(json.dumps(result, cls=CustomJSONEncoder))
+            return JSONResponse(content=content)
             
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported task type: {task.task_type}")
             
     except Exception as e:
         logger.error(f"Error handling task: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        error_content = json.loads(json.dumps(
+            {"status": "error", "error": str(e)},
+            cls=CustomJSONEncoder
+        ))
+        return JSONResponse(
+            status_code=500,
+            content=error_content
+        ) 
