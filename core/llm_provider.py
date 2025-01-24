@@ -16,7 +16,7 @@ class LLMProvider:
     def __init__(self, model: Optional[str] = None):
         self.api_key = os.getenv('OPENAI_API_KEY')
         self.model = model  # 保存传入的模型名称
-        self.default_model = 'gpt-4-turbo-preview'  # 默认模型
+        self.default_model = 'gpt-4o-2024-08-06'  # 默认模型
         self.max_retries = int(os.getenv('MAX_RETRIES', 3))
         self.timeout = int(os.getenv('TIMEOUT', 300))
         
