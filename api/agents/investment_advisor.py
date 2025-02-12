@@ -9,10 +9,12 @@ from core.llm_provider import LLMProvider
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
-from ta.trend import SMAIndicator, EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.volatility import BollingerBands, AverageTrueRange
-from ta.volume import OnBalanceVolumeIndicator, ForceIndexIndicator
+from ta.trend import SMAIndicator, EMAIndicator, MACD, ADXIndicator, IchimokuIndicator, KSTIndicator
+from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator, ROCIndicator
+from ta.volatility import BollingerBands, AverageTrueRange, KeltnerChannels
+from ta.volume import OnBalanceVolumeIndicator, ForceIndexIndicator, ChaikinMoneyFlowIndicator, MFIIndicator
+from ta.others import DailyReturnIndicator, CumulativeReturnIndicator
+from prophet import Prophet
 
 logger = logging.getLogger(__name__)
 
@@ -129,98 +131,258 @@ class InvestmentAdvisor:
             return None
 
     def _generate_charts(self, symbol: str, hist: pd.DataFrame, prediction_result: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        """生成图表数据"""
+        """生成增强的图表数据"""
         try:
             if hist.empty:
                 return []
             
-            # 历史价格图表
-            price_data = hist['Close'].tolist()
-            dates = hist.index.strftime('%Y-%m-%d').tolist()
+            # 计算技术指标
+            technical_indicators = self._calculate_technical_indicators(hist)
             
-            # 如果有预测数据，添加到图表中
-            if prediction_result and prediction_result['predicted_prices']:
-                price_data.extend(prediction_result['predicted_prices'])
-                dates.extend(prediction_result['prediction_dates'])
+            # 基础样式配置
+            chart_config = {
+                "responsive": True,
+                "maintainAspectRatio": False,
+                "interaction": {
+                    "intersect": False,
+                    "mode": "index"
+                },
+                "plugins": {
+                    "tooltip": {
+                        "enabled": True,
+                        "position": "nearest"
+                    },
+                    "legend": {
+                        "position": "top",
+                        "align": "center"
+                    }
+                }
+            }
             
+            # 1. 价格和预测图表
             price_chart = {
                 "type": "line",
                 "title": f"{symbol} 价格走势与预测",
-                "labels": dates,
+                "labels": hist.index.strftime('%Y-%m-%d').tolist(),
                 "datasets": [
                     {
-                        "label": "历史价格",
+                        "label": "收盘价",
                         "data": hist['Close'].tolist(),
                         "borderColor": "rgb(75, 192, 192)",
+                        "fill": False,
                         "tension": 0.1
+                    },
+                    {
+                        "label": "20日均线",
+                        "data": technical_indicators['trend_indicators']['sma_20'],
+                        "borderColor": "rgb(255, 159, 64)",
+                        "borderDash": [5, 5],
+                        "fill": False
+                    },
+                    {
+                        "label": "50日均线",
+                        "data": technical_indicators['trend_indicators']['sma_50'],
+                        "borderColor": "rgb(54, 162, 235)",
+                        "borderDash": [5, 5],
+                        "fill": False
                     }
-                ]
+                ],
+                "config": {
+                    **chart_config,
+                    "scales": {
+                        "y": {
+                            "title": {
+                                "display": True,
+                                "text": "价格"
+                            }
+                        }
+                    }
+                }
             }
             
-            # 如果有预测数据，添加预测数据集
-            if prediction_result and prediction_result['predicted_prices']:
+            # 如果有预测数据，添加到价格图表
+            if prediction_result and prediction_result.get('lstm_predictions'):
                 price_chart["datasets"].append({
-                    "label": "预测价格",
-                    "data": [None] * len(hist) + prediction_result['predicted_prices'],
-                    "borderColor": "rgb(255, 99, 132)",
+                    "label": "LSTM预测",
+                    "data": [None] * len(hist) + prediction_result['lstm_predictions'],
+                    "borderColor": "rgb(153, 102, 255)",
                     "borderDash": [5, 5],
-                    "tension": 0.1
+                    "fill": False
                 })
             
-            # 成交量图表
-            volume_chart = {
-                "type": "bar",
-                "title": f"{symbol} 成交量",
-                "labels": hist.index.strftime('%Y-%m-%d').tolist(),
-                "datasets": [{
-                    "label": "成交量",
-                    "data": hist['Volume'].tolist(),
-                    "backgroundColor": "rgb(153, 102, 255)",
-                }]
+            if prediction_result and prediction_result.get('prophet_predictions'):
+                price_chart["datasets"].append({
+                    "label": "Prophet预测",
+                    "data": [None] * len(hist) + prediction_result['prophet_predictions'],
+                    "borderColor": "rgb(255, 99, 132)",
+                    "borderDash": [5, 5],
+                    "fill": False
+                })
+            
+            # 2. 技术指标组合图表
+            technical_chart = {
+                "type": "line",
+                "title": f"{symbol} 技术指标",
+                "labels": hist.index.strftime('%Y-%m-%d').tolist()[-60:],  # 显示最近60天
+                "datasets": [
+                    {
+                        "label": "RSI",
+                        "data": technical_indicators['momentum_indicators']['rsi'],
+                        "borderColor": "rgb(255, 99, 132)",
+                        "yAxisID": "rsi"
+                    },
+                    {
+                        "label": "MACD",
+                        "data": technical_indicators['trend_indicators']['macd_line'],
+                        "borderColor": "rgb(54, 162, 235)",
+                        "yAxisID": "macd"
+                    },
+                    {
+                        "label": "MACD信号",
+                        "data": technical_indicators['trend_indicators']['macd_signal'],
+                        "borderColor": "rgb(75, 192, 192)",
+                        "yAxisID": "macd"
+                    }
+                ],
+                "config": {
+                    **chart_config,
+                    "scales": {
+                        "rsi": {
+                            "position": "right",
+                            "title": {
+                                "display": True,
+                                "text": "RSI"
+                            },
+                            "min": 0,
+                            "max": 100
+                        },
+                        "macd": {
+                            "position": "left",
+                            "title": {
+                                "display": True,
+                                "text": "MACD"
+                            }
+                        }
+                    }
+                }
             }
             
-            # 技术指标图表
-            if prediction_result and prediction_result['technical_indicators']:
-                indicators = prediction_result['technical_indicators']
-                technical_chart = {
-                    "type": "line",
-                    "title": f"{symbol} 技术指标",
-                    "labels": hist.index.strftime('%Y-%m-%d').tolist()[-30:],  # 只显示最近30天
-                    "datasets": [
-                        {
-                            "label": "20日均线",
-                            "data": [indicators['sma_20']] * 30,
-                            "borderColor": "rgb(255, 159, 64)",
-                            "tension": 0.1
-                        },
-                        {
-                            "label": "50日均线",
-                            "data": [indicators['sma_50']] * 30,
-                            "borderColor": "rgb(54, 162, 235)",
-                            "tension": 0.1
-                        },
-                        {
-                            "label": "布林带上轨",
-                            "data": [indicators['bb_upper']] * 30,
-                            "borderColor": "rgb(75, 192, 192)",
-                            "borderDash": [5, 5],
-                            "tension": 0.1
-                        },
-                        {
-                            "label": "布林带下轨",
-                            "data": [indicators['bb_lower']] * 30,
-                            "borderColor": "rgb(75, 192, 192)",
-                            "borderDash": [5, 5],
-                            "tension": 0.1
+            # 3. 波动率指标图表
+            volatility_chart = {
+                "type": "line",
+                "title": f"{symbol} 波动率指标",
+                "labels": hist.index.strftime('%Y-%m-%d').tolist()[-30:],  # 显示最近30天
+                "datasets": [
+                    {
+                        "label": "布林带上轨",
+                        "data": technical_indicators['volatility_indicators']['bb_high'],
+                        "borderColor": "rgba(255, 99, 132, 0.8)",
+                        "fill": False
+                    },
+                    {
+                        "label": "布林带中轨",
+                        "data": technical_indicators['volatility_indicators']['bb_mid'],
+                        "borderColor": "rgba(54, 162, 235, 0.8)",
+                        "fill": False
+                    },
+                    {
+                        "label": "布林带下轨",
+                        "data": technical_indicators['volatility_indicators']['bb_low'],
+                        "borderColor": "rgba(75, 192, 192, 0.8)",
+                        "fill": False
+                    },
+                    {
+                        "label": "Keltner通道上轨",
+                        "data": technical_indicators['volatility_indicators']['keltner_high'],
+                        "borderColor": "rgba(153, 102, 255, 0.8)",
+                        "borderDash": [5, 5],
+                        "fill": False
+                    },
+                    {
+                        "label": "Keltner通道下轨",
+                        "data": technical_indicators['volatility_indicators']['keltner_low'],
+                        "borderColor": "rgba(255, 159, 64, 0.8)",
+                        "borderDash": [5, 5],
+                        "fill": False
+                    }
+                ],
+                "config": {
+                    **chart_config,
+                    "scales": {
+                        "y": {
+                            "title": {
+                                "display": True,
+                                "text": "价格"
+                            }
                         }
-                    ]
+                    }
                 }
-                return [price_chart, volume_chart, technical_chart]
+            }
             
-            return [price_chart, volume_chart]
+            # 4. 成交量和资金流向图表
+            volume_chart = {
+                "type": "mixed",
+                "title": f"{symbol} 成交量和资金流向",
+                "labels": hist.index.strftime('%Y-%m-%d').tolist()[-30:],
+                "datasets": [
+                    {
+                        "type": "bar",
+                        "label": "成交量",
+                        "data": hist['Volume'].tolist()[-30:],
+                        "backgroundColor": "rgba(153, 102, 255, 0.5)",
+                        "yAxisID": "volume"
+                    },
+                    {
+                        "type": "line",
+                        "label": "资金流量指标(MFI)",
+                        "data": technical_indicators['volume_indicators']['mfi'],
+                        "borderColor": "rgb(255, 99, 132)",
+                        "yAxisID": "mfi"
+                    },
+                    {
+                        "type": "line",
+                        "label": "钱德动量(CMF)",
+                        "data": technical_indicators['volume_indicators']['cmf'],
+                        "borderColor": "rgb(54, 162, 235)",
+                        "yAxisID": "cmf"
+                    }
+                ],
+                "config": {
+                    **chart_config,
+                    "scales": {
+                        "volume": {
+                            "position": "left",
+                            "title": {
+                                "display": True,
+                                "text": "成交量"
+                            }
+                        },
+                        "mfi": {
+                            "position": "right",
+                            "title": {
+                                "display": True,
+                                "text": "MFI"
+                            },
+                            "min": 0,
+                            "max": 100
+                        },
+                        "cmf": {
+                            "position": "right",
+                            "title": {
+                                "display": True,
+                                "text": "CMF"
+                            },
+                            "min": -1,
+                            "max": 1
+                        }
+                    }
+                }
+            }
+            
+            return [price_chart, technical_chart, volatility_chart, volume_chart]
             
         except Exception as e:
-            logger.error(f"Error generating charts for {symbol}: {str(e)}")
+            logger.error(f"生成图表时出错 {symbol}: {str(e)}")
             return []
 
     def _analyze_fundamentals(self, symbol: str, stock: yf.Ticker) -> Dict[str, Any]:
@@ -402,8 +564,8 @@ class InvestmentAdvisor:
             请用专业但易懂的语言回答，注重实用性和可操作性。对于每个关键结论，请提供具体的数据支持。
             """
             
-            # 使用GPT-4-Turbo-Preview生成分析
-            analysis = await self.llm_provider.generate_response(prompt, model="gpt-4-turbo-preview")
+            # 使用流式响应
+            analysis = await self.llm_provider.generate_response_stream(prompt, model="gpt-4-turbo-preview")
             
             return {
                 "quantitative_metrics": {
@@ -792,7 +954,123 @@ class InvestmentAdvisor:
                 "risk_level": "未知"
             }
 
-    def _predict_stock_price(self, hist: pd.DataFrame, prediction_days: int = 30) -> Dict[str, Any]:
+    async def _predict_with_llm(self, hist: pd.DataFrame, technical_indicators: Dict[str, Any], days_to_predict: int = 30) -> Dict[str, Any]:
+        """使用大模型进行价格预测"""
+        try:
+            # 准备最近的价格数据
+            recent_prices = hist['Close'].tail(60).tolist()  # 最近60天数据
+            current_price = recent_prices[-1]
+            price_changes = [((p2 - p1) / p1) * 100 for p1, p2 in zip(recent_prices[:-1], recent_prices[1:])]
+            avg_daily_change = sum(price_changes) / len(price_changes)
+            volatility = np.std(price_changes)
+
+            # 准备技术分析数据
+            trend_indicators = technical_indicators['trend_indicators']
+            momentum_indicators = technical_indicators['momentum_indicators']
+            volatility_indicators = technical_indicators['volatility_indicators']
+            volume_indicators = technical_indicators['volume_indicators']
+
+            # 构建提示词
+            prompt = f"""作为一个专业的量化分析师和市场预测专家，请基于以下详细的市场数据，预测未来{days_to_predict}天的股票价格走势。
+
+当前市场状况：
+1. 价格数据：
+- 当前价格：${current_price:.2f}
+- 平均日涨跌幅：{avg_daily_change:.2f}%
+- 价格波动率：{volatility:.2f}%
+
+2. 趋势指标：
+- MACD线：{trend_indicators['macd_line']:.2f}
+- MACD信号：{trend_indicators['macd_signal']:.2f}
+- ADX (趋势强度)：{trend_indicators['adx']:.2f}
+- 20日均线：{trend_indicators['sma_20']:.2f}
+- 50日均线：{trend_indicators['sma_50']:.2f}
+
+3. 动量指标：
+- RSI：{momentum_indicators['rsi']:.2f}
+- 随机指标K：{momentum_indicators['stoch_k']:.2f}
+- 随机指标D：{momentum_indicators['stoch_d']:.2f}
+- ROC：{momentum_indicators['roc']:.2f}
+
+4. 波动率指标：
+- 布林带上轨：{volatility_indicators['bb_high']:.2f}
+- 布林带中轨：{volatility_indicators['bb_mid']:.2f}
+- 布林带下轨：{volatility_indicators['bb_low']:.2f}
+- ATR：{volatility_indicators['atr']:.2f}
+
+5. 成交量指标：
+- 资金流量(MFI)：{volume_indicators['mfi']:.2f}
+- 钱德动量(CMF)：{volume_indicators['cmf']:.2f}
+- 成交量趋势：{volume_indicators['force_index']:.2f}
+
+基于以上数据：
+1. 请分析当前市场趋势和可能的转折点
+2. 评估支撑位和阻力位
+3. 预测未来{days_to_predict}天的每日收盘价，以当前价格为基准
+4. 为每个预测提供置信度评分（0-100）
+
+请以JSON格式返回预测结果，格式如下：
+{{
+    "analysis": "市场分析总结",
+    "support_levels": [支撑位1, 支撑位2],
+    "resistance_levels": [阻力位1, 阻力位2],
+    "predictions": [
+        {{"day": 1, "price": 价格, "confidence": 置信度}},
+        ...
+    ]
+}}"""
+
+            # 使用GPT-4进行预测
+            response = await self.llm_provider.generate_response(prompt, model="gpt-4-turbo-preview")
+            
+            try:
+                # 解析JSON响应
+                prediction_data = eval(response)
+                
+                # 提取预测价格和日期
+                predicted_prices = [p['price'] for p in prediction_data['predictions']]
+                confidence_scores = [p['confidence'] for p in prediction_data['predictions']]
+                
+                # 生成预测日期
+                last_date = hist.index[-1]
+                prediction_dates = [(last_date + timedelta(days=i+1)).strftime('%Y-%m-%d') 
+                                  for i in range(days_to_predict)]
+                
+                # 计算平均置信度
+                avg_confidence = sum(confidence_scores) / len(confidence_scores)
+                
+                return {
+                    "predicted_prices": predicted_prices,
+                    "prediction_dates": prediction_dates,
+                    "confidence": avg_confidence / 100,  # 转换为0-1范围
+                    "support_levels": prediction_data['support_levels'],
+                    "resistance_levels": prediction_data['resistance_levels'],
+                    "analysis": prediction_data['analysis']
+                }
+                
+            except Exception as e:
+                logger.error(f"解析预测结果时出错: {str(e)}")
+                return {
+                    "predicted_prices": [],
+                    "prediction_dates": [],
+                    "confidence": 0,
+                    "support_levels": [],
+                    "resistance_levels": [],
+                    "analysis": "无法解析预测结果"
+                }
+                
+        except Exception as e:
+            logger.error(f"LLM预测出错: {str(e)}")
+            return {
+                "predicted_prices": [],
+                "prediction_dates": [],
+                "confidence": 0,
+                "support_levels": [],
+                "resistance_levels": [],
+                "analysis": "预测过程出错"
+            }
+
+    async def _predict_stock_price(self, hist: pd.DataFrame, prediction_days: int = 30) -> Dict[str, Any]:
         """预测股票价格"""
         try:
             if hist.empty:
@@ -801,119 +1079,27 @@ class InvestmentAdvisor:
                     "prediction_dates": [],
                     "confidence": 0,
                     "technical_indicators": {},
-                    "market_analysis": {}
+                    "market_analysis": {},
+                    "support_levels": [],
+                    "resistance_levels": [],
+                    "analysis": "无数据可供分析"
                 }
             
             # 计算技术指标
-            close_prices = hist['Close']
-            
-            # 计算移动平均线
-            sma_20 = SMAIndicator(close=close_prices, window=20)
-            sma_50 = SMAIndicator(close=close_prices, window=50)
-            ema_20 = EMAIndicator(close=close_prices, window=20)
-            
-            # 计算RSI
-            rsi = RSIIndicator(close=close_prices, window=14)
-            
-            # 计算布林带
-            bb = BollingerBands(close=close_prices, window=20, window_dev=2)
-            
-            # 计算市场指标
-            market_indicators = self._calculate_market_indicators(hist)
+            technical_indicators = self._calculate_technical_indicators(hist)
             market_analysis = self._analyze_market_condition(hist)
             
-            # 准备特征数据
-            features = pd.DataFrame({
-                'sma_20': sma_20.sma_indicator(),
-                'sma_50': sma_50.sma_indicator(),
-                'ema_20': ema_20.ema_indicator(),
-                'rsi': rsi.rsi(),
-                'bb_high': bb.bollinger_hband(),
-                'bb_low': bb.bollinger_lband(),
-                'volume': hist['Volume'],
-                'close': close_prices,
-                'macd': market_indicators['trend']['macd'],
-                'adx': market_indicators['trend']['adx'],
-                'stoch_k': market_indicators['momentum']['stoch_k'],
-                'obv': market_indicators['volume']['obv'],
-                'atr': market_indicators['volatility']['atr']
-            }).dropna()
-            
-            if len(features) < 50:
-                return {
-                    "predicted_prices": [],
-                    "prediction_dates": [],
-                    "confidence": 0,
-                    "technical_indicators": {},
-                    "market_analysis": market_analysis
-                }
-            
-            # 准备训练数据
-            X = features[:-1].values
-            y = features['close'].shift(-1).dropna().values
-            
-            # 划分训练集和测试集
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-            
-            # 训练集成模型
-            rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
-            gb_model = GradientBoostingRegressor(n_estimators=100, random_state=42)
-            
-            rf_model.fit(X_train, y_train)
-            gb_model.fit(X_train, y_train)
-            
-            # 准备预测数据
-            last_data = features.iloc[-1:].values
-            
-            # 进行预测
-            rf_predictions = []
-            gb_predictions = []
-            current_data = last_data
-            
-            for _ in range(prediction_days):
-                rf_pred = rf_model.predict(current_data)[0]
-                gb_pred = gb_model.predict(current_data)[0]
-                
-                # 集成预测结果
-                prediction = (rf_pred + gb_pred) / 2
-                rf_predictions.append(rf_pred)
-                gb_predictions.append(gb_pred)
-                
-                # 更新特征用于下一次预测
-                new_data = current_data.copy()
-                new_data[0, -1] = prediction
-                current_data = new_data
-            
-            # 生成预测日期
-            last_date = hist.index[-1]
-            prediction_dates = [(last_date + timedelta(days=i+1)).strftime('%Y-%m-%d') 
-                              for i in range(prediction_days)]
-            
-            # 计算预测置信度
-            rf_confidence = rf_model.score(X_test, y_test)
-            gb_confidence = gb_model.score(X_test, y_test)
-            ensemble_confidence = (rf_confidence + gb_confidence) / 2
-            
-            # 获取最新的技术指标值
-            technical_indicators = {
-                "sma_20": self._sanitize_float(features['sma_20'].iloc[-1]),
-                "sma_50": self._sanitize_float(features['sma_50'].iloc[-1]),
-                "ema_20": self._sanitize_float(features['ema_20'].iloc[-1]),
-                "rsi": self._sanitize_float(features['rsi'].iloc[-1]),
-                "bb_upper": self._sanitize_float(features['bb_high'].iloc[-1]),
-                "bb_lower": self._sanitize_float(features['bb_low'].iloc[-1])
-            }
+            # 使用LLM进行预测
+            prediction_result = await self._predict_with_llm(hist, technical_indicators, prediction_days)
             
             return {
-                "predicted_prices": [(rf_pred + gb_pred) / 2 for rf_pred, gb_pred in zip(rf_predictions, gb_predictions)],
-                "prediction_dates": prediction_dates,
-                "confidence": self._sanitize_float(ensemble_confidence),
+                **prediction_result,
                 "technical_indicators": technical_indicators,
                 "market_analysis": market_analysis
             }
             
         except Exception as e:
-            logger.error(f"Error predicting stock price: {str(e)}")
+            logger.error(f"预测股票价格时出错: {str(e)}")
             return {
                 "predicted_prices": [],
                 "prediction_dates": [],
@@ -924,5 +1110,655 @@ class InvestmentAdvisor:
                     "volatility": "未知",
                     "strength": "未知",
                     "risk_level": "未知"
+                },
+                "support_levels": [],
+                "resistance_levels": [],
+                "analysis": "预测过程出错"
+            }
+
+    def _calculate_technical_indicators(self, hist: pd.DataFrame) -> Dict[str, Any]:
+        """计算扩展的技术指标"""
+        try:
+            close = hist['Close']
+            high = hist['High']
+            low = hist['Low']
+            volume = hist['Volume']
+            
+            # 趋势指标
+            sma_20 = SMAIndicator(close, window=20).sma_indicator()
+            sma_50 = SMAIndicator(close, window=50).sma_indicator()
+            ema_20 = EMAIndicator(close, window=20).ema_indicator()
+            macd = MACD(close)
+            adx = ADXIndicator(high, low, close)
+            ichimoku = IchimokuIndicator(high, low)
+            kst = KSTIndicator(close)
+            
+            # 动量指标
+            rsi = RSIIndicator(close)
+            stoch = StochasticOscillator(high, low, close)
+            williams_r = WilliamsRIndicator(high, low, close)
+            roc = ROCIndicator(close)
+            
+            # 波动率指标
+            bollinger = BollingerBands(close)
+            atr = AverageTrueRange(high, low, close)
+            keltner = KeltnerChannels(high, low, close)
+            
+            # 成交量指标
+            obv = OnBalanceVolumeIndicator(close, volume)
+            fi = ForceIndexIndicator(close, volume)
+            cmf = ChaikinMoneyFlowIndicator(high, low, close, volume)
+            mfi = MFIIndicator(high, low, close, volume)
+            
+            # 收益率指标
+            daily_return = DailyReturnIndicator(close)
+            cumulative_return = CumulativeReturnIndicator(close)
+            
+            return {
+                "trend_indicators": {
+                    "sma_20": self._sanitize_float(sma_20.iloc[-1]),
+                    "sma_50": self._sanitize_float(sma_50.iloc[-1]),
+                    "ema_20": self._sanitize_float(ema_20.iloc[-1]),
+                    "macd_line": self._sanitize_float(macd.macd().iloc[-1]),
+                    "macd_signal": self._sanitize_float(macd.macd_signal().iloc[-1]),
+                    "macd_diff": self._sanitize_float(macd.macd_diff().iloc[-1]),
+                    "adx": self._sanitize_float(adx.adx().iloc[-1]),
+                    "ichimoku_a": self._sanitize_float(ichimoku.ichimoku_a().iloc[-1]),
+                    "ichimoku_b": self._sanitize_float(ichimoku.ichimoku_b().iloc[-1]),
+                    "kst": self._sanitize_float(kst.kst().iloc[-1]),
+                    "kst_sig": self._sanitize_float(kst.kst_sig().iloc[-1])
+                },
+                "momentum_indicators": {
+                    "rsi": self._sanitize_float(rsi.rsi().iloc[-1]),
+                    "stoch_k": self._sanitize_float(stoch.stoch().iloc[-1]),
+                    "stoch_d": self._sanitize_float(stoch.stoch_signal().iloc[-1]),
+                    "williams_r": self._sanitize_float(williams_r.williams_r().iloc[-1]),
+                    "roc": self._sanitize_float(roc.roc().iloc[-1])
+                },
+                "volatility_indicators": {
+                    "bb_high": self._sanitize_float(bollinger.bollinger_hband().iloc[-1]),
+                    "bb_mid": self._sanitize_float(bollinger.bollinger_mavg().iloc[-1]),
+                    "bb_low": self._sanitize_float(bollinger.bollinger_lband().iloc[-1]),
+                    "atr": self._sanitize_float(atr.average_true_range().iloc[-1]),
+                    "keltner_high": self._sanitize_float(keltner.keltner_channel_hband().iloc[-1]),
+                    "keltner_mid": self._sanitize_float(keltner.keltner_channel_mband().iloc[-1]),
+                    "keltner_low": self._sanitize_float(keltner.keltner_channel_lband().iloc[-1])
+                },
+                "volume_indicators": {
+                    "obv": self._sanitize_float(obv.on_balance_volume().iloc[-1]),
+                    "force_index": self._sanitize_float(fi.force_index().iloc[-1]),
+                    "cmf": self._sanitize_float(cmf.chaikin_money_flow().iloc[-1]),
+                    "mfi": self._sanitize_float(mfi.money_flow_index().iloc[-1])
+                },
+                "return_indicators": {
+                    "daily_return": self._sanitize_float(daily_return.daily_return().iloc[-1]),
+                    "cumulative_return": self._sanitize_float(cumulative_return.cumulative_return().iloc[-1])
                 }
-            } 
+            }
+        except Exception as e:
+            logger.error(f"计算技术指标时出错: {str(e)}")
+            return {}
+
+    def _predict_with_prophet(self, hist: pd.DataFrame, days_to_predict: int = 30) -> List[float]:
+        """使用Prophet进行价格预测"""
+        try:
+            # 准备数据
+            df = pd.DataFrame({
+                'ds': hist.index,
+                'y': hist['Close']
+            })
+            
+            # 创建和训练模型
+            model = Prophet(
+                daily_seasonality=True,
+                weekly_seasonality=True,
+                yearly_seasonality=True,
+                changepoint_prior_scale=0.05
+            )
+            model.fit(df)
+            
+            # 创建预测日期
+            future_dates = model.make_future_dataframe(periods=days_to_predict)
+            forecast = model.predict(future_dates)
+            
+            # 返回预测结果
+            predictions = forecast.tail(days_to_predict)['yhat'].tolist()
+            return predictions
+            
+        except Exception as e:
+            logger.error(f"Prophet预测出错: {str(e)}")
+            return []
+
+    async def analyze_market(self) -> Dict[str, Any]:
+        """分析整体市场状况"""
+        try:
+            # 初始化基础结构
+            result = {
+                "market_overview": {},
+                "hot_sectors": {},
+                "news_summary": "",
+                "potential_stocks": [],
+                "market_sentiment": None,
+                "analysis_report": "",
+                "news_items": []
+            }
+
+            # 1. 首先获取主要市场指数数据
+            indices = {
+                'SPY': '^GSPC',  # S&P 500
+                'QQQ': '^IXIC',  # NASDAQ
+                'DIA': '^DJI',   # Dow Jones
+            }
+            
+            for name, symbol in indices.items():
+                stock = self._fetch_stock_data(symbol)
+                if stock:
+                    hist = stock.history(period="1y")
+                    if not hist.empty:
+                        result["market_overview"][name] = self._analyze_index(hist)
+                        # 立即返回更新
+                        yield result
+
+            # 2. 分析热门行业板块
+            sectors_data = await self._analyze_sectors()
+            result["hot_sectors"] = sectors_data
+            yield result
+
+            # 3. 获取市场新闻和情绪
+            news_data = await self._analyze_market_news()
+            result["news_summary"] = news_data["summary"]
+            result["news_items"] = news_data.get("news_items", [])
+            yield result
+
+            # 4. 寻找潜力股票
+            potential_stocks = await self._find_potential_stocks()
+            result["potential_stocks"] = potential_stocks
+            yield result
+
+            # 5. 生成市场情绪指标
+            market_sentiment = self._calculate_market_sentiment(
+                result["market_overview"],
+                result["hot_sectors"],
+                news_data
+            )
+            result["market_sentiment"] = market_sentiment
+            yield result
+
+            # 6. 最后生成分析报告
+            analysis_report = await self._generate_market_report(
+                result["market_overview"],
+                result["hot_sectors"],
+                market_sentiment,
+                news_data
+            )
+            result["analysis_report"] = analysis_report
+            yield result
+
+        except Exception as e:
+            logger.error(f"市场分析出错: {str(e)}")
+            raise
+
+    def _analyze_index(self, hist: pd.DataFrame) -> Dict[str, Any]:
+        """分析市场指数数据"""
+        try:
+            current = hist['Close'].iloc[-1]
+            prev_close = hist['Close'].iloc[-2]
+            month_ago = hist['Close'].iloc[-22] if len(hist) >= 22 else hist['Close'].iloc[0]
+            
+            daily_change = ((current - prev_close) / prev_close) * 100
+            monthly_change = ((current - month_ago) / month_ago) * 100
+            
+            # 计算波动率 (20日年化)
+            returns = hist['Close'].pct_change()
+            volatility = returns.std() * np.sqrt(252) * 100
+            
+            # 计算技术指标
+            sma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+            sma50 = hist['Close'].rolling(window=50).mean().iloc[-1]
+            
+            rsi = RSIIndicator(hist['Close']).rsi().iloc[-1]
+            macd = MACD(hist['Close'])
+            
+            return {
+                "current": current,
+                "daily_change": daily_change,
+                "monthly_change": monthly_change,
+                "volatility": volatility,
+                "sma20_diff": ((current - sma20) / sma20) * 100,
+                "sma50_diff": ((current - sma50) / sma50) * 100,
+                "rsi": rsi,
+                "macd": macd.macd().iloc[-1]
+            }
+        except Exception as e:
+            logger.error(f"分析指数数据时出错: {str(e)}")
+            return {
+                "current": 0,
+                "daily_change": 0,
+                "monthly_change": 0,
+                "volatility": 0,
+                "sma20_diff": 0,
+                "sma50_diff": 0,
+                "rsi": 0,
+                "macd": 0
+            }
+
+    async def _fetch_macro_indicators(self) -> Dict[str, Dict[str, Any]]:
+        """获取宏观经济指标"""
+        try:
+            # 这里可以集成其他数据源获取更多宏观指标
+            indicators = {
+                "GDP增长率": {"value": 0, "change": 0, "trend": "稳定"},
+                "CPI同比": {"value": 0, "change": 0, "trend": "稳定"},
+                "PPI同比": {"value": 0, "change": 0, "trend": "稳定"},
+                "失业率": {"value": 0, "change": 0, "trend": "稳定"},
+                "M2增速": {"value": 0, "change": 0, "trend": "稳定"},
+                "社会融资规模": {"value": 0, "change": 0, "trend": "稳定"}
+            }
+            
+            # 使用LLM分析宏观经济形势
+            prompt = """基于当前市场数据，分析以下宏观经济指标的可能状态：
+            1. GDP增长率
+            2. CPI同比
+            3. PPI同比
+            4. 失业率
+            5. M2增速
+            6. 社会融资规模
+            
+            请给出每个指标的预估值、变化趋势和分析。
+            """
+            
+            response = await self.llm_provider.generate_response(prompt)
+            # 解析响应更新指标
+            
+            return indicators
+        except Exception as e:
+            logger.error(f"获取宏观指标时出错: {str(e)}")
+            return {}
+
+    async def _analyze_sectors(self) -> Dict[str, Dict[str, Any]]:
+        """分析行业板块表现"""
+        try:
+            # 主要行业ETF
+            sector_etfs = {
+                "科技": "XLK",
+                "金融": "XLF",
+                "医疗": "XLV",
+                "能源": "XLE",
+                "原材料": "XLB",
+                "工业": "XLI",
+                "必需消费": "XLP",
+                "非必需消费": "XLY",
+                "房地产": "XLRE",
+                "公用事业": "XLU"
+            }
+            
+            sectors_data = {}
+            for name, symbol in sector_etfs.items():
+                stock = self._fetch_stock_data(symbol)
+                if stock:
+                    hist = stock.history(period="1m")
+                    if not hist.empty:
+                        sectors_data[name] = self._analyze_sector(hist)
+            
+            return sectors_data
+        except Exception as e:
+            logger.error(f"分析行业板块时出错: {str(e)}")
+            return {}
+
+    def _analyze_sector(self, hist: pd.DataFrame) -> Dict[str, Any]:
+        """分析单个行业板块数据"""
+        try:
+            current_price = hist['Close'].iloc[-1]
+            prev_price = hist['Close'].iloc[-2]
+            price_change = ((current_price - prev_price) / prev_price) * 100
+            
+            current_volume = hist['Volume'].iloc[-1]
+            avg_volume = hist['Volume'].mean()
+            volume_change = ((current_volume - avg_volume) / avg_volume) * 100
+            
+            # 计算动量和技术指标
+            returns = hist['Close'].pct_change()
+            momentum = returns.mean() * 100
+            
+            rsi = RSIIndicator(hist['Close']).rsi().iloc[-1]
+            macd = MACD(hist['Close'])
+            macd_signal = "看多" if macd.macd().iloc[-1] > macd.macd_signal().iloc[-1] else "看空"
+            
+            adx = ADXIndicator(hist['High'], hist['Low'], hist['Close'])
+            trend_strength = adx.adx().iloc[-1]
+            
+            # 判断趋势
+            sma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+            sma50 = hist['Close'].rolling(window=50).mean().iloc[-1]
+            if current_price > sma50 and sma20 > sma50:
+                trend = "上升"
+            elif current_price < sma50 and sma20 < sma50:
+                trend = "下降"
+            else:
+                trend = "震荡"
+            
+            # 判断成交量趋势
+            volume_sma5 = hist['Volume'].rolling(window=5).mean().iloc[-1]
+            volume_sma20 = hist['Volume'].rolling(window=20).mean().iloc[-1]
+            if volume_sma5 > volume_sma20:
+                volume_trend = "放量"
+            elif volume_sma5 < volume_sma20 * 0.8:
+                volume_trend = "缩量"
+            else:
+                volume_trend = "平稳"
+            
+            return {
+                "symbol": hist.name,
+                "price_change": price_change,
+                "volume_change": volume_change,
+                "momentum": momentum,
+                "rsi": rsi,
+                "current_price": current_price,
+                "macd_signal": macd_signal,
+                "trend_strength": trend_strength,
+                "trend": trend,
+                "volume_trend": volume_trend
+            }
+        except Exception as e:
+            logger.error(f"分析行业数据时出错: {str(e)}")
+            return {}
+
+    async def _analyze_market_news(self) -> Dict[str, Any]:
+        """分析市场新闻和情绪"""
+        try:
+            news_items = []
+            
+            # 1. 从Yahoo Finance获取RSS新闻
+            try:
+                import feedparser
+                # Yahoo Finance RSS feeds
+                rss_urls = [
+                    'https://finance.yahoo.com/news/rssindex',
+                    'https://finance.yahoo.com/news/markets/rssindex'
+                ]
+                
+                for url in rss_urls:
+                    feed = feedparser.parse(url)
+                    for entry in feed.entries[:5]:  # 获取最新的5条新闻
+                        news_items.append({
+                            'title': entry.title,
+                            'summary': entry.summary,
+                            'link': entry.link,
+                            'published': entry.published,
+                            'source': 'Yahoo Finance'
+                        })
+            except Exception as e:
+                logger.error(f"获取Yahoo Finance新闻时出错: {str(e)}")
+
+            # 2. 从Alpha Vantage获取新闻
+            try:
+                import requests
+                alpha_vantage_key = "demo"  # 使用demo key或从配置中获取
+                url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={alpha_vantage_key}&topics=finance,technology"
+                
+                response = requests.get(url)
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'feed' in data:
+                        for item in data['feed'][:5]:  # 获取最新的5条新闻
+                            news_items.append({
+                                'title': item.get('title', ''),
+                                'summary': item.get('summary', ''),
+                                'link': item.get('url', ''),
+                                'published': item.get('time_published', ''),
+                                'source': 'Alpha Vantage',
+                                'sentiment': item.get('overall_sentiment_score', 0)
+                            })
+            except Exception as e:
+                logger.error(f"获取Alpha Vantage新闻时出错: {str(e)}")
+
+            # 3. 从Finnhub获取新闻
+            try:
+                finnhub_key = "demo"  # 使用demo key或从配置中获取
+                url = f"https://finnhub.io/api/v1/news?category=general&token={finnhub_key}"
+                
+                response = requests.get(url)
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data[:5]:  # 获取最新的5条新闻
+                        news_items.append({
+                            'title': item.get('headline', ''),
+                            'summary': item.get('summary', ''),
+                            'link': item.get('url', ''),
+                            'published': item.get('datetime', ''),
+                            'source': 'Finnhub',
+                            'sentiment': item.get('sentiment', 0)
+                        })
+            except Exception as e:
+                logger.error(f"获取Finnhub新闻时出错: {str(e)}")
+
+            # 如果没有获取到任何新闻，返回默认值
+            if not news_items:
+                return {
+                    "summary": "无法获取市场新闻",
+                    "sentiment_score": 0.5,
+                    "news_items": []
+                }
+
+            # 使用LLM分析新闻并生成摘要
+            prompt = f"""请分析以下市场新闻并生成一份简洁的摘要，重点关注对市场可能产生的影响：
+
+新闻列表：
+{chr(10).join([f"- {item['title']} ({item['source']})" for item in news_items])}
+
+请提供：
+1. 新闻要点总结
+2. 可能对市场产生的影响
+3. 需要重点关注的领域
+"""
+            
+            # 使用流式响应
+            news_summary = await self.llm_provider.generate_response_stream(prompt)
+            
+            # 计算整体情绪分数
+            sentiment_scores = [item.get('sentiment', 0.5) for item in news_items if 'sentiment' in item]
+            avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.5
+            
+            return {
+                "summary": news_summary,
+                "sentiment_score": avg_sentiment,
+                "news_items": news_items
+            }
+            
+        except Exception as e:
+            logger.error(f"分析市场新闻时出错: {str(e)}")
+            return {
+                "summary": "无法获取市场新闻",
+                "sentiment_score": 0.5,
+                "news_items": []
+            }
+
+    async def _find_potential_stocks(self) -> List[Dict[str, Any]]:
+        """寻找潜力股票"""
+        try:
+            # 可以根据不同的筛选策略寻找潜力股
+            stocks = []
+            # 示例：筛选科技板块的股票
+            tech_stocks = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'AMD']
+            
+            for symbol in tech_stocks:
+                stock = self._fetch_stock_data(symbol)
+                if stock:
+                    hist = stock.history(period="3mo")
+                    info = stock.info
+                    
+                    if not hist.empty:
+                        momentum = hist['Close'].pct_change().mean() * 100
+                        rsi = RSIIndicator(hist['Close']).rsi().iloc[-1]
+                        
+                        stock_data = {
+                            "symbol": symbol,
+                            "name": info.get('longName', symbol),
+                            "sector": info.get('sector', '未知'),
+                            "momentum": momentum,
+                            "rsi": rsi,
+                            "pe_ratio": info.get('trailingPE'),
+                            "profit_margin": info.get('profitMargins', 0) * 100,
+                            "current_price": hist['Close'].iloc[-1],
+                            "volume": hist['Volume'].iloc[-1],
+                            "market_cap": info.get('marketCap', 0),
+                            "score": self._calculate_stock_score(momentum, rsi, info)
+                        }
+                        stocks.append(stock_data)
+            
+            # 按得分排序
+            stocks.sort(key=lambda x: x['score'], reverse=True)
+            return stocks[:10]  # 返回前10只股票
+            
+        except Exception as e:
+            logger.error(f"寻找潜力股时出错: {str(e)}")
+            return []
+
+    def _calculate_stock_score(self, momentum: float, rsi: float, info: Dict[str, Any]) -> float:
+        """计算股票综合得分"""
+        try:
+            score = 0
+            
+            # 动量得分 (30%)
+            if momentum > 0:
+                score += min(momentum, 10) * 3
+            
+            # RSI得分 (20%)
+            if 40 <= rsi <= 60:
+                score += 20
+            elif 30 <= rsi < 40 or 60 < rsi <= 70:
+                score += 15
+            elif 20 <= rsi < 30 or 70 < rsi <= 80:
+                score += 10
+            
+            # 基本面得分 (50%)
+            pe_ratio = info.get('trailingPE', 0)
+            profit_margin = info.get('profitMargins', 0)
+            
+            if 0 < pe_ratio <= 30:
+                score += 25
+            elif 30 < pe_ratio <= 50:
+                score += 15
+            
+            if profit_margin > 0.2:
+                score += 25
+            elif 0.1 <= profit_margin <= 0.2:
+                score += 15
+            elif 0 < profit_margin < 0.1:
+                score += 10
+            
+            return min(score, 100)
+            
+        except Exception as e:
+            logger.error(f"计算股票得分时出错: {str(e)}")
+            return 0
+
+    def _calculate_market_sentiment(
+        self,
+        market_overview: Dict[str, Any],
+        hot_sectors: Dict[str, Any],
+        news_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """计算市场情绪指标"""
+        try:
+            # 技术面情绪
+            technical_score = 0
+            if market_overview:
+                avg_rsi = sum(m['rsi'] for m in market_overview.values()) / len(market_overview)
+                avg_momentum = sum(m['daily_change'] for m in market_overview.values()) / len(market_overview)
+                
+                technical = {
+                    "rsi": avg_rsi,
+                    "macd": "看多" if avg_momentum > 0 else "看空",
+                    "trend": "上涨" if avg_momentum > 1 else "下跌" if avg_momentum < -1 else "震荡",
+                    "volume_trend": "放量" if any(s['volume_trend'] == "放量" for s in hot_sectors.values()) else "平稳",
+                    "volatility": sum(m['volatility'] for m in market_overview.values()) / len(market_overview),
+                    "score": 0
+                }
+                
+                # 计算技术面得分
+                if 40 <= avg_rsi <= 60:
+                    technical_score += 30
+                elif 30 <= avg_rsi < 40 or 60 < avg_rsi <= 70:
+                    technical_score += 20
+                
+                if avg_momentum > 0:
+                    technical_score += min(avg_momentum * 2, 20)
+                
+                technical["score"] = technical_score
+            
+            # 新闻情绪
+            news_sentiment = {
+                "overall": "中性",
+                "score": news_data.get("sentiment_score", 0.5) * 100
+            }
+            
+            # 计算综合情绪得分
+            overall_score = (technical_score * 0.6 + news_sentiment["score"] * 0.4)
+            
+            return {
+                "technical": technical,
+                "news": news_sentiment,
+                "overall_score": overall_score
+            }
+            
+        except Exception as e:
+            logger.error(f"计算市场情绪时出错: {str(e)}")
+            return {
+                "technical": {
+                    "rsi": 50,
+                    "macd": "未知",
+                    "trend": "未知",
+                    "volume_trend": "未知",
+                    "volatility": 0,
+                    "score": 0
+                },
+                "news": {
+                    "overall": "未知",
+                    "score": 50
+                },
+                "overall_score": 50
+            }
+
+    async def _generate_market_report(
+        self,
+        market_overview: Dict[str, Any],
+        hot_sectors: Dict[str, Any],
+        market_sentiment: Dict[str, Any],
+        news_data: Dict[str, Any]
+    ) -> str:
+        """生成市场分析报告"""
+        try:
+            prompt = f"""请基于以下市场数据生成一份详细的市场分析报告：
+
+1. 市场概览：
+{market_overview}
+
+2. 热门行业板块：
+{hot_sectors}
+
+3. 市场情绪：
+技术面得分：{market_sentiment['technical']['score']}
+新闻情绪得分：{market_sentiment['news']['score']}
+综合情绪得分：{market_sentiment['overall_score']}
+
+4. 市场新闻摘要：
+{news_data['summary']}
+
+请从以下几个方面进行分析：
+1. 市场整体走势和关键技术位
+2. 行业板块轮动分析
+3. 市场情绪和投资者心理
+4. 主要风险因素
+5. 投资策略建议
+
+请用专业但易懂的语言撰写报告。
+"""
+            
+            # 使用流式响应
+            report = await self.llm_provider.generate_response_stream(prompt)
+            return report
+            
+        except Exception as e:
+            logger.error(f"生成市场报告时出错: {str(e)}")
+            return "无法生成市场分析报告" 

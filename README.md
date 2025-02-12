@@ -96,6 +96,34 @@ npm run dev
 3. 前端和后端服务需要在不同的终端窗口中运行
 4. 如遇到问题，请检查控制台输出的错误信息
 
+### API注册说明
+
+为了获取完整的市场数据和新闻信息，您需要注册以下免费API：
+
+1. Alpha Vantage API
+   - 访问 https://www.alphavantage.co/support/#api-key 注册免费API key
+   - 免费版每分钟限制5次请求
+   - 用于获取市场新闻和股票数据
+
+2. Finnhub API
+   - 访问 https://finnhub.io/register 注册免费API key
+   - 免费版每分钟限制30次请求
+   - 用于获取实时市场新闻和股票数据
+
+3. Yahoo Finance API
+   - 无需注册，直接使用RSS feed
+   - 完全免费，无使用限制
+   - 用于获取基础市场新闻
+
+获取API key后，将它们添加到环境变量中：
+```bash
+# 在 .env 文件中添加
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
+FINNHUB_API_KEY=your_finnhub_key
+```
+
+注意：如果不设置这些API key，系统将使用演示模式，但可能会受到更严格的访问限制。
+
 ## 常见问题
 
 1. 如果遇到依赖安装问题，可以尝试：
